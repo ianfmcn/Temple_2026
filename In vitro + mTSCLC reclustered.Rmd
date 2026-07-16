@@ -1,0 +1,2682 @@
+---
+title: "Overlay with integrated treatment and non-integrated controls"
+output: html_notebook
+---
+
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+#library(AnnotationHub)
+library(future)
+library(dittoSeq)
+
+install.packages("scCustomize")
+
+library(scCustomize)
+varibow_pal <- DiscretePalette_scCustomize(num_colors = 36, palette = "varibow")
+
+library(patchwork)
+
+library(Seurat)
+library(ggplot2)
+library(cowplot)
+library(patchwork)
+
+```
+
+```{r}
+#Load the seurat object for the reference rdata
+
+invitro.cells.combined.ref <- invitro.cells.combined.clean
+
+
+# Generate the DimPlot with custom colors and labels
+p1 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids", label = TRUE)
+
+print(p1)
+
+```
+
+```{r}
+#loading packages
+plan("multicore", workers = 8) 
+options(future.globals.maxSize = 64000 * 1024^2) #for 128 GB RAM
+#load query rdata and SCT transform 
+
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+
+mTSCLC_subset.query <- cells.combined.p12
+  
+```
+
+```{r}
+
+# Total number of cells in the Seurat object
+total_cells <- ncol(mTSCLC_subset.query)
+print(paste("Total number of cells in the dataset:", total_cells))
+
+# Count the number of cells in each cluster for SCT_snn_res.1
+cluster_counts <- mTSCLC_subset.query@meta.data %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(count = n(), .groups = 'drop')
+
+condition_counts <- mTSCLC_subset.query@meta.data %>%
+  group_by(condition) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Sum of cells across all clusters
+total_cells_from_clusters <- sum(cluster_counts$count)
+print(paste("Total number of cells from cluster counts:", total_cells_from_clusters))
+
+# Sum of cells across all clusters
+total_cells_from_condition <- sum(condition_counts$count)
+print(paste("Total number of cells from condition counts:", total_cells_from_condition))
+
+# Print both the cluster-wise counts and check for mismatches
+print("Cluster counts:")
+print(cluster_counts)
+
+# Print both the cluster-wise counts and check for mismatches
+print("Condition counts:")
+print(condition_counts)
+
+# Check if the total number of cells matches the sum of cells from clusters
+if (total_cells == total_cells_from_clusters) {
+  print("The total cell count matches the sum of cells from the clusters.")
+} else {
+  print("Warning: The total cell count does NOT match the sum of cells from the clusters.")
+}
+
+# Check if the total number of cells matches the sum of cells from clusters
+if (total_cells == total_cells_from_condition) {
+  print("The total cell count matches the sum of cells from the condition.")
+} else {
+  print("Warning: The total cell count does NOT match the sum of cells from the condition.")
+}
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+options(future.globals.maxSize = 70 * 1024^2 * 1024)  # Set to 30 GB
+
+# Store original coordinates for both reference and query
+ref_coordinates <- Embeddings(invitro.cells.combined.ref, "umap")
+original_coordinates <- Embeddings(mTSCLC_subset.query, "umap")
+
+# Run UMAP on reference with return.model=TRUE but keep original coordinates
+invitro.cells.combined.ref <- RunUMAP(
+  invitro.cells.combined.ref,
+  dims = 1:20,
+  reduction = "pca",
+  return.model = TRUE    # This is crucial for the mapping step
+)
+# Restore original reference coordinates
+invitro.cells.combined.ref[["umap"]]@cell.embeddings <- ref_coordinates
+
+# Run UMAP with return.model=TRUE but keep original coordinates for query
+mTSCLC_subset.query <- RunUMAP(
+  mTSCLC_subset.query,
+  dims = 1:20,
+  reduction = "pca",
+  return.model = TRUE    # This is crucial for the mapping step
+)
+# Replace the UMAP embeddings with the original coordinates
+mTSCLC_subset.query[["umap"]]@cell.embeddings <- original_coordinates
+
+# First, SCTransform the reference dataset
+invitro.cells.combined.ref <- SCTransform(invitro.cells.combined.ref, verbose = FALSE)
+
+# SCTransform the query dataset
+mTSCLC_subset.query <- SCTransform(mTSCLC_subset.query, verbose = FALSE)
+
+
+# Find anchors using SCT assay
+print("Finding transfer anchors...")
+cell.anchors <- FindTransferAnchors(
+  reference = invitro.cells.combined.ref,
+  query = mTSCLC_subset.query,
+  dims = 1:20,
+  reference.reduction = "pca",
+  normalization.method = "SCT",
+  features = VariableFeatures(invitro.cells.combined.ref),
+  k.filter = 200
+)
+
+# Transfer data using reference cluster information
+print("Transferring data...")
+predictions <- TransferData(
+  anchorset = cell.anchors, 
+  refdata = invitro.cells.combined.ref$new_cluster_ids,
+  dims = 1:20,
+  k.weight = 50
+)
+
+# Add predictions to query object
+mTSCLC_subset.query <- AddMetaData(mTSCLC_subset.query, metadata = predictions)
+
+# Check if the prediction score column exists
+if ("predicted.celltype.score" %in% colnames(mTSCLC_subset.query@meta.data)) {
+  score_column <- "predicted.celltype.score"
+} else if ("prediction.score.max" %in% colnames(mTSCLC_subset.query@meta.data)) {
+  score_column <- "prediction.score.max"
+} else {
+  stop("Neither 'predicted.celltype.score' nor 'prediction.score.max' found in metadata")
+}
+
+# Set a confidence threshold
+confidence_threshold <- 0.9
+
+# Add a new column for high-confidence predictions
+mTSCLC_subset.query$high_conf_celltype <- ifelse(mTSCLC_subset.query[[score_column]] > confidence_threshold,
+                                          mTSCLC_subset.query$predicted.id,
+                                          "Uncertain")
+
+# Map query to reference UMAP
+print("Mapping query to reference UMAP...")
+mTSCLC_subset.query <- MapQuery(
+  anchorset = cell.anchors, 
+  reference = invitro.cells.combined.ref, 
+  query = mTSCLC_subset.query,
+  refdata = list(celltype = "new_cluster_ids"),
+  reference.reduction = "pca", 
+  reduction.model = "umap"
+)
+
+# Create plots
+print("Creating plots...")
+# Plot 1: Original reference UMAP structure with cell types
+p4 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids",
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("Reference Cell Types (Original Structure)")
+
+# Plot 2: mTSCLC cells mapped onto reference UMAP structure
+p5 <- DimPlot(mTSCLC_subset.query, reduction = "ref.umap",
+              group.by = "predicted.id",  # Show predicted cell types
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("mTSCLC Cells Mapped to Reference Structure")
+
+# Plot 3: Original mTSCLC UMAP colored by predicted cell types
+p6 <- DimPlot(mTSCLC_subset.query, reduction = "umap",
+              group.by = "predicted.id",  # Show predicted cell types on original structure
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("mTSCLC Original Structure (Colored by Predicted Types)")
+
+# Display all plots
+print(p4)
+print(p5)
+print(p6)
+
+# Save all plots
+ggsave("1_reference_original.png", p4, width = 16, height = 8, dpi = 300)
+ggsave("2_mTSCLC_mapped_to_reference.png", p5, width = 16, height = 8, dpi = 300)
+ggsave("3_mTSCLC_original_with_predictions.png", p6, width = 16, height = 8, dpi = 300)
+
+# Print summary of predictions
+print("Summary of predicted cell types in mTSCLC:")
+print(table(mTSCLC_subset.query$predicted.id))
+
+# Print prediction confidence summary
+print("Summary of high confidence vs uncertain predictions:")
+print(table(mTSCLC_subset.query$high_conf_celltype != "Uncertain"))
+
+# Create a heatmap of prediction scores by cell type
+predictions_summary <- aggregate(
+  mTSCLC_subset.query[[score_column]], 
+  by = list(predicted_type = mTSCLC_subset.query$predicted.id),
+  FUN = function(x) c(
+    mean = mean(x),
+    median = median(x),
+    high_conf = mean(x > confidence_threshold)
+  )
+)
+
+print("Prediction confidence by cell type:")
+print(predictions_summary)
+```
+
+
+```{r}
+# Visualize the results
+print("Creating plots...")
+p4 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids",  
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("In Vitro to mTSCLC Reference")
+
+p5 <- DimPlot(mTSCLC_subset.query, reduction = "ref.umap", group.by = "high_conf_celltype", 
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("In Vitro to mTSCLC High Confidence")
+
+# Display the combined plot
+print(p4)
+print(p5)
+
+# Save the plots
+ggsave("reference_clusters_p4.png", p4, width = 16, height = 8, dpi = 300)
+ggsave("query_clusters_p5.png", p5, width = 16, height = 8, dpi = 300)
+
+# Print summary of transferred labels (high confidence)
+print("Summary of transferred labels (high confidence):")
+print(table(mTSCLC_subset.query$high_conf_celltype))
+
+# Check the distribution of original conditions in the reference
+print("Distribution of original conditions in reference cell types:")
+print(table(invitro.cells.combined.ref$condition, invitro.cells.combined.ref$new_cluster_ids))
+
+# Visualize the distribution of prediction scores
+ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count")
+
+ggsave("prediction_score_distribution.png", width = 10, height = 6)
+
+# Print the column names of the metadata to help debugging
+print("Metadata column names:")
+print(colnames(mTSCLC_subset.query@meta.data))
+```
+
+
+```{r}
+# Visualization of prediction scores
+p7 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count") +
+  theme_minimal()
+
+# Add a violin plot to show distribution by predicted cell type
+p8 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = .data[[score_column]])) +
+  geom_violin(fill = "skyblue") +
+  geom_boxplot(width = 0.1) +
+  geom_hline(yintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Prediction Scores by Cell Type") +
+  xlab("Predicted Cell Type") +
+  ylab("Prediction Score")
+
+
+# Visualization of prediction scores
+p9 <-ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count") +
+  theme_minimal()
+
+# Add a violin plot to show distribution by predicted cell type
+p10 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = .data[[score_column]])) +
+  geom_violin(fill = "skyblue") +
+  geom_boxplot(width = 0.1) +
+  geom_hline(yintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Prediction Scores by Cell Type") +
+  xlab("Predicted Cell Type") +
+  ylab("Prediction Score")
+
+# Display all plots
+print(p7)
+print(p8)
+print(p9)
+print(p10)
+
+# Save all plots
+ggsave("Distribution of scores.png", p7, width = 16, height = 8, dpi = 300)
+ggsave("Violin of scores.png", p8, width = 16, height = 8, dpi = 300)
+ggsave("Distribution of cell types.png", p9, width = 16, height = 8, dpi = 300)
+ggsave("Violin of cell types.png", p10, width = 16, height = 8, dpi = 300)
+```
+
+
+```{r}
+# Get total number of cells
+total_cells <- ncol(mTSCLC_subset.query)
+
+# All predictions (including uncertain)
+print("All predictions (including low confidence):")
+all_predictions <- table(mTSCLC_subset.query$predicted.id)
+print(all_predictions)
+print(paste("Total cells:", total_cells))
+print(paste("Percentage of total cells:"))
+print(round(prop.table(all_predictions) * 100, 2))
+
+# High confidence predictions only
+print("\nHigh confidence predictions only:")
+high_conf_predictions <- table(mTSCLC_subset.query$predicted.id[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+print(high_conf_predictions)
+print(paste("Total high confidence cells:", sum(high_conf_predictions)))
+print(paste("Percentage of total cells that are high confidence:"))
+print(round(prop.table(high_conf_predictions) * 100, 2))
+
+# Create a comparison data frame
+comparison_df <- data.frame(
+  Cell_Type = names(all_predictions),
+  Total_Predictions = as.numeric(all_predictions),
+  High_Confidence = as.numeric(high_conf_predictions[names(all_predictions)]),
+  row.names = NULL
+)
+
+# Calculate percentages and differences
+comparison_df <- comparison_df %>%
+  mutate(
+    Percent_Total = round(Total_Predictions / total_cells * 100, 2),
+    Percent_High_Conf = round(High_Confidence / total_cells * 100, 2),
+    Percent_Confident = round(High_Confidence / Total_Predictions * 100, 2)
+  )
+
+# Print formatted comparison table
+print("\nDetailed comparison:")
+print(comparison_df)
+
+# Optional: Create a visualization of the comparison
+ggplot(comparison_df, aes(x = Cell_Type)) +
+  geom_bar(aes(y = Total_Predictions, fill = "All Predictions"), stat = "identity", position = "dodge", alpha = 0.6) +
+  geom_bar(aes(y = High_Confidence, fill = "High Confidence"), stat = "identity", position = "dodge", alpha = 0.8) +
+  scale_fill_manual(values = c("All Predictions" = "grey", "High Confidence" = "darkblue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Comparison of All vs High Confidence Predictions",
+       x = "Cell Type",
+       y = "Number of Cells",
+       fill = "Prediction Type")
+
+# Save the plot
+ggsave("prediction_confidence_comparison.png", width = 10, height = 6)
+```
+```{r}
+# Get total number of cells
+total_cells <- 6104
+
+# Get all unique cell types first to ensure we capture all categories
+all_cell_types <- unique(mTSCLC_subset.query$predicted.id)
+
+# Create the counts separately first
+total_pred_table <- table(mTSCLC_subset.query$predicted.id)
+high_conf_table <- table(mTSCLC_subset.query$predicted.id[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+
+# Create a data frame with all cell types and fill in the counts
+comparison_df <- data.frame(
+  Cell_Type = all_cell_types,
+  Total_Predictions = as.numeric(total_pred_table[all_cell_types]),
+  High_Confidence = 0  # Initialize with zeros
+) 
+
+# Fill in high confidence counts where they exist
+high_conf_cell_types <- names(high_conf_table)
+comparison_df$High_Confidence[match(high_conf_cell_types, comparison_df$Cell_Type)] <- 
+  as.numeric(high_conf_table)
+
+# Calculate percentages
+comparison_df <- comparison_df %>%
+  mutate(
+    Percent_Total = round(Total_Predictions / total_cells * 100, 2),
+    Percent_High_Conf = round(High_Confidence / total_cells * 100, 2),
+    Percent_Confident = round(High_Confidence / Total_Predictions * 100, 2)
+  )
+
+# Create labels for the legend
+total_count <- sum(comparison_df$Total_Predictions)
+high_conf_count <- sum(comparison_df$High_Confidence)
+total_percent <- round(total_count/total_cells * 100, 1)
+high_conf_percent <- round(high_conf_count/total_cells * 100, 1)
+
+legend_labels <- c(
+  `All Predictions` = paste0("All Predictions\n(", total_count, " cells, ", total_percent, "%)"),
+  `High Confidence` = paste0("High Confidence\n(", high_conf_count, " cells, ", high_conf_percent, "%)")
+)
+
+# Create the visualization
+ggplot(comparison_df, aes(x = Cell_Type)) +
+  geom_bar(aes(y = Total_Predictions, fill = "All Predictions"), 
+           stat = "identity", 
+           position = "dodge", 
+           alpha = 0.6) +
+  geom_bar(aes(y = High_Confidence, fill = "High Confidence"), 
+           stat = "identity", 
+           position = "dodge", 
+           alpha = 0.8) +
+  scale_fill_manual(
+    values = c("All Predictions" = "grey", "High Confidence" = "darkblue"),
+    labels = legend_labels
+  ) +
+  scale_y_continuous(
+    limits = c(0, total_cells),
+    expand = c(0, 0),
+    breaks = seq(0, total_cells, by = 2000)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 16),  # Increased size from default
+    legend.position = "top",
+    legend.box.spacing = unit(0.5, "cm"),
+    legend.text = element_text(size = 16),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 16)
+) +
+  labs(
+    title = "Comparison of All vs High Confidence Predictions",
+    subtitle = paste0("Total cells analyzed: ", total_cells),
+    x = "Cell Type",
+    y = "Number of Cells",
+    fill = "Prediction Type"
+  )
+
+# Save the plot
+ggsave(
+  "prediction_confidence_comparison.png", 
+  width = 12, 
+  height = 8, 
+  dpi = 300
+)
+
+# Print summary statistics
+print("Summary Statistics:")
+print(paste("Total cells analyzed:", total_cells))
+print(paste("Total high confidence cells:", high_conf_count))
+print(paste("Percent high confidence:", high_conf_percent, "%"))
+print("\nDetailed statistics by cell type:")
+print(comparison_df)
+
+# Save detailed statistics
+write.csv(comparison_df, "cell_type_prediction_statistics.csv", row.names = FALSE)
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+library(dplyr)
+library(viridis)
+
+# Define custom colors for cell types using your color scheme
+cell_colors <- c(
+  "mXEN" = "#D98880",
+  "mTSC" = "#F39C12",
+  "Serum/LIF mESC" = "#F4D03F",
+  "2i/LIF mESC" = "#52BE80",
+  "Amniotic Mesoderm" = "#5DADE2",
+  "Amniotic Ectoderm" = "#AF7AC5",
+  "Uncertain" = "#515151"  # Keep grey for uncertain cells
+)
+
+# 1. Reference structure
+p1 <- DimPlot(invitro.cells.combined.ref, 
+              reduction = "umap",
+              group.by = "new_cluster_ids", 
+              label = FALSE, 
+              repel = TRUE,
+              cols = cell_colors) +
+  ggtitle("Reference Structure") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  )
+
+# 2. Original structure with all predictions
+p2_all <- DimPlot(mTSCLC_subset.query, 
+                  reduction = "umap",
+                  group.by = "predicted.id", 
+                  label = FALSE, 
+                  repel = TRUE,
+                  cols = cell_colors) +
+  ggtitle("All Predictions") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  )
+
+# 3. High confidence predictions with layered plotting
+umap_coords <- Embeddings(mTSCLC_subset.query, "umap")
+plot_data <- data.frame(
+  UMAP_1 = umap_coords[,1],
+  UMAP_2 = umap_coords[,2],
+  celltype = mTSCLC_subset.query$high_conf_celltype
+)
+
+p2_high_conf <- ggplot(plot_data, aes(x = UMAP_1, y = UMAP_2, color = celltype)) +
+  # Plot uncertain cells first
+  geom_point(data = subset(plot_data, celltype == "Uncertain"),
+             color = "#515151", alpha = 0.2, size = 0.5) +
+  # Plot high confidence cells on top
+  geom_point(data = subset(plot_data, celltype != "Uncertain"),
+             size = 1,
+             alpha = 0.6) +
+  scale_color_manual(values = cell_colors) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  ) + 
+  guides(color = guide_legend(override.aes = list(size = 6, alpha = 1))) +
+  ggtitle("High Confidence Cell Type Predictions") + 
+  coord_fixed()
+
+# Create a combined plot
+combined_plot <- p1 | p2_all | p2_high_conf
+
+# Save plots
+ggsave("1_reference_structure.png", p1, width = 10, height = 8, dpi = 300)
+ggsave("2_all_predictions.png", p2_all, width = 10, height = 8, dpi = 300)
+ggsave("3_high_confidence_predictions.png", p2_high_conf, width = 10, height = 8, dpi = 300)
+ggsave("combined_umap_visualization.png", combined_plot, width = 24, height = 8, dpi = 300)
+
+# Print cell type statistics
+print("All predictions (including uncertain):")
+print(table(mTSCLC_subset.query$predicted.id))
+
+print("\nHigh confidence predictions only:")
+high_conf_counts <- table(mTSCLC_subset.query$high_conf_celltype[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+print(high_conf_counts)
+
+# Calculate and print percentages
+total_cells <- sum(table(mTSCLC_subset.query$high_conf_celltype))
+percentages <- (table(mTSCLC_subset.query$high_conf_celltype) / total_cells) * 100
+
+print("\nPercentages of each cell type:")
+print(round(percentages, 2))
+
+# Create a summary data frame
+summary_df <- data.frame(
+  CellType = names(high_conf_counts),
+  Count = as.numeric(high_conf_counts),
+  Percentage = round(as.numeric(high_conf_counts) / sum(high_conf_counts) * 100, 2)
+)
+
+# Save summary statistics
+write.csv(summary_df, "cell_type_summary.csv", row.names = FALSE)
+```
+```{r}
+cluster_color_palette <- c(
+  "mXEN" = "#D98880",
+  "mTSC" = "#F39C12",
+  "Serum/LIF mESC" = "#F4D03F",
+  "2i/LIF mESC" = "#52BE80",
+  "Amniotic Mesoderm" = "#5DADE2",
+  "Amniotic Ectoderm" = "#AF7AC5",
+  "Uncertain" = "#515151"  # Keep grey for uncertain cells
+)
+# Stacked bar chart of cell type proportions
+ggplot(data.frame(celltype = mTSCLC_subset.query$high_conf_celltype), aes(x = "All", fill = celltype)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = cluster_color_palette) +
+  theme_minimal() +
+  ggtitle("Proportion of Predicted Cell Types")
+
+# Prediction score distributions by cell type
+ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = prediction.score.max)) +
+  geom_violin(aes(fill = predicted.id)) +
+  geom_boxplot(width = 0.1) +
+  scale_fill_manual(values = cluster_color_palette) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(ggtext)
+
+# Define extended color palette for clusters
+color_palette <- c(
+  "#FFD700",  # Gold (Topaz-like)
+  "#FF8C00",  # Dark Orange (Citrine-like)
+  "#FF4500",  # Orange Red (Fire Opal-like)
+  "#DC143C",  # Crimson (Ruby-like)
+  "#8B0000",  # Dark Red 
+  "#800080",  # Purple (Alexandrite-like)
+  "#4B0082",  # Indigo (Sapphire-like)
+  "#9400D3",  # Dark Violet (Amethyst-like)
+  "#6A5ACD",  # Slate Blue (Tanzanite-like)
+  "#4682B4",  # Steel Blue (Aquamarine-like)
+  "#00BFFF",  # Deep Sky Blue (Blue Topaz-like)
+  "#008080",  # Teal (Emerald-like)
+  "#20B2AA",  # Light Sea Green (Turquoise-like)
+  "#32CD32",  # Lime Green (Peridot-like)
+  "#00FF00"   # Bright Lime
+)
+
+# Filter for high confidence predictions
+high_conf_data <- mTSCLC_subset.query@meta.data %>%
+  filter(high_conf_celltype != "Uncertain") %>%
+  mutate(cluster = as.character(SCT_snn_res.0.6))
+
+# Calculate number of cells per cluster and predicted cell type
+cluster_celltype_counts <- table(high_conf_data$cluster,
+                               high_conf_data$high_conf_celltype)
+
+# Calculate percentages
+celltype_cluster_percentages <- prop.table(cluster_celltype_counts, margin = 2) * 100
+
+# Convert to data frame
+df <- as.data.frame(celltype_cluster_percentages)
+colnames(df) <- c("Cluster", "CellType", "Percentage")
+
+# Add count information
+df$Count <- as.vector(cluster_celltype_counts)
+
+# Calculate total cells per cell type
+total_cells_per_celltype <- colSums(cluster_celltype_counts)
+
+# Add total cells per cell type to the dataframe
+df$TotalInCellType <- total_cells_per_celltype[df$CellType]
+
+# Function to create a single pie chart
+create_pie_chart <- function(cell_type) {
+  celltype_data <- df[df$CellType == cell_type,]
+  
+  # Create custom labels with counts and percentages
+  custom_labels <- paste0(
+    "Cluster ", celltype_data$Cluster, 
+    "\n(", celltype_data$Count, "/", celltype_data$TotalInCellType, ")",
+    "\n", sprintf("%.1f%%", celltype_data$Percentage)
+  )
+  
+  total_cells <- sum(celltype_data$Count)
+  
+  p <- ggplot(celltype_data, aes(x = "", y = Percentage, fill = Cluster)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    scale_fill_manual(values = color_palette[1:length(unique(df$Cluster))],
+                     labels = custom_labels) +
+    theme_void() +
+    theme(
+      legend.position = "right",
+      legend.title = element_text(size = 16),
+      legend.text = element_text(size = 12),
+      legend.key.size = unit(2, "cm"),
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 16, hjust = 0.5)
+    ) +
+    ggtitle(cell_type) +
+    labs(subtitle = paste("Total high confidence cells:", total_cells)) +
+    guides(fill = guide_legend(title = "Cluster\n(Count/Total)\nPercentage",
+                             override.aes = list(size = 1)))
+  
+  return(p)
+}
+
+# Create pie charts for each cell type
+pie_charts <- lapply(sort(unique(df$CellType)), create_pie_chart)
+
+# Arrange pie charts in a grid
+grid_arranged <- grid.arrange(grobs = pie_charts, ncol = 3)
+
+# Save the grid of pie charts
+ggsave("high_confidence_celltype_by_cluster_pie_charts.png",
+       grid_arranged,
+       width = 30,
+       height = 20,
+       units = "in",
+       dpi = 300)
+
+# Save data to CSV
+write.csv(df, "high_confidence_celltype_by_cluster_percentages_and_counts.csv",
+          row.names = FALSE)
+
+# Print summaries
+print("Summary of high confidence predictions by cluster:")
+print(table(high_conf_data$cluster, high_conf_data$high_conf_celltype))
+
+print("\nCluster contribution to each cell type (%):")
+print(celltype_cluster_percentages)
+
+print("\nTotal cells per cell type:")
+print(total_cells_per_celltype)
+
+# Additional analysis: Cluster composition
+print("\nPercentage of each cluster that is high confidence:")
+cluster_totals <- table(mTSCLC_subset.query$SCT_snn_res.0.6)
+high_conf_by_cluster <- table(high_conf_data$cluster)
+cluster_percentages <- (high_conf_by_cluster / cluster_totals) * 100
+print(cluster_percentages)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(pheatmap)
+library(RColorBrewer)
+
+cluster_color_palette <- c(
+  "#FFD700",  # Gold (Topaz-like)
+  "#FF8C00",  # Dark Orange (Citrine-like)
+  "#FF4500",  # Orange Red (Fire Opal-like)
+  "#DC143C",  # Crimson (Ruby-like)
+  "#8B0000",  # Dark Red 
+  "#800080",  # Purple (Alexandrite-like)
+  "#4B0082",  # Indigo (Sapphire-like)
+  "#9400D3",  # Dark Violet (Amethyst-like)
+  "#6A5ACD",  # Slate Blue (Tanzanite-like)
+  "#4682B4",  # Steel Blue (Aquamarine-like)
+  "#00BFFF",  # Deep Sky Blue (Blue Topaz-like)
+  "#008080",  # Teal (Emerald-like)
+  "#20B2AA",  # Light Sea Green (Turquoise-like)
+  "#32CD32",  # Lime Green (Peridot-like)
+  "#00FF00"   # Bright Lime
+)
+
+# Reshape the data for the heatmap
+heatmap_data <- final_counts %>%
+  select(Cluster, predicted.celltype, percentage_after) %>%
+  pivot_wider(names_from = predicted.celltype, values_from = percentage_after, values_fill = list(percentage_after = 0))
+
+# Add Amniotic Mesoderm column with 0%
+heatmap_data$`Amniotic Mesoderm` <- 0
+
+# Ensure all cell types of interest are present
+for (cell_type in cell_types_of_interest) {
+  if (!(cell_type %in% colnames(heatmap_data))) {
+    heatmap_data[[cell_type]] <- 0
+  }
+}
+
+# Convert to matrix while preserving row names
+heatmap_matrix <- as.matrix(heatmap_data %>% column_to_rownames("Cluster"))
+
+# Reorder columns to match cell_types_of_interest
+heatmap_matrix <- heatmap_matrix[, cell_types_of_interest]
+
+print("Heatmap Matrix dimensions:")
+print(dim(heatmap_matrix))
+print("Heatmap Matrix row names:")
+print(rownames(heatmap_matrix))
+print("Heatmap Matrix column names:")
+print(colnames(heatmap_matrix))
+
+# Create annotations
+col_annotation <- data.frame(CellType = factor(colnames(heatmap_matrix), levels = cell_types_of_interest))
+rownames(col_annotation) <- colnames(heatmap_matrix)
+
+row_annotation <- data.frame(Cluster = factor(rownames(heatmap_matrix)))
+rownames(row_annotation) <- rownames(heatmap_matrix)
+
+print("Column Annotation:")
+print(col_annotation)
+print("Row Annotation:")
+print(row_annotation)
+
+# Define color palettes
+celltype_colors <- setNames(
+  colorRampPalette(cell_type_colors)(length(cell_types_of_interest)),
+  cell_types_of_interest
+)
+
+print("Cell Type Colors:")
+print(celltype_colors)
+
+cluster_colors <- setNames(
+  cluster_color_palette[1:nrow(heatmap_matrix)],
+  rownames(heatmap_matrix)
+)
+
+print("Cluster Colors:")
+print(cluster_colors)
+
+# Define annotation colors
+annotation_colors <- list(
+  CellType = celltype_colors,
+  Cluster = cluster_colors
+)
+
+print("Annotation Colors:")
+print(str(annotation_colors))
+
+# Create the heatmap
+png("mTSCLC_celltype_percentage_heatmap_fixed.png", width = 6000, height = 5000, res = 300)
+pheatmap(heatmap_matrix,
+         display_numbers = TRUE,
+         number_format = "%.2f%%",
+         number_color = "white",
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         color = colorRampPalette(c("#000080", "#4682B4", "#800020"))(100),
+         main = "In Vitro Cell Types Identified in mTSCLC clusters",
+         fontsize = 20,
+         fontsize_number = 20,
+         cellwidth = 100,
+         cellheight = 60,
+         angle_col="45",
+         annotation_col = col_annotation,
+         annotation_row = row_annotation,
+         annotation_colors = annotation_colors,
+                  annotation_names_row = FALSE,
+         annotation_names_col = FALSE,
+         border_color = "darkgrey",
+          show_rownames = TRUE,
+                  treeheight_row = 400,
+         treeheight_col = 0,
+         fontsize_row = 18,
+         fontsize_col = 18)
+dev.off()
+
+print("Heatmap creation attempt completed.")
+```
+```{r}
+# Density plots of prediction scores
+ggplot(mTSCLC_subset.query@meta.data, aes(x = prediction.score.max)) +
+  geom_density(aes(fill = predicted.id), alpha = 0.5) +
+  facet_wrap(~predicted.id) +
+  scale_fill_manual(values = cluster_color_palette)
+
+# Spatial distribution of prediction confidence
+FeaturePlot(mTSCLC_subset.query, 
+           features = "prediction.score.max",
+           reduction = "umap")
+```
+```{r}
+library(pheatmap)
+# Set identity for reference dataset
+Idents(invitro.cells.combined.ref) <- "new_cluster_ids"
+
+# Define cell types
+cell_types <- c("Serum/LIF mESC", "2i/LIF mESC", "mTSC", "mXEN")
+
+# Create empty lists to store results
+all_markers_list <- list()
+top_genes_list <- list()
+
+# Function to get expression info for a gene list
+get_expression_info <- function(object, genes, cell_type) {
+  # Calculate percentage expressed
+  pct_expressed <- rowMeans(GetAssayData(object, slot = "counts")[genes, 
+                           WhichCells(object, idents = cell_type)] > 0) * 100
+  
+  # Calculate average expression
+  avg_exp <- rowMeans(GetAssayData(object, slot = "data")[genes, 
+                      WhichCells(object, idents = cell_type)])
+  
+  return(data.frame(
+    gene = genes,
+    pct_expressed = pct_expressed,
+    avg_expression = avg_exp
+  ))
+}
+
+# Find markers for each cell type compared to all others
+for(cell_type in cell_types) {
+  markers <- FindMarkers(invitro.cells.combined.ref,
+                        ident.1 = cell_type,
+                        ident.2 = setdiff(cell_types, cell_type),
+                        min.pct = 0.25)
+  
+  # Store full results
+  all_markers_list[[cell_type]] <- markers
+  
+  # Get top 100 upregulated genes with statistics
+  top_genes_df <- markers %>%
+    filter(avg_log2FC > 1) %>%
+    arrange(desc(avg_log2FC)) %>%
+    head(100)
+  
+  # Get expression info for top genes
+  exp_info <- get_expression_info(invitro.cells.combined.ref, 
+                                rownames(top_genes_df), 
+                                cell_type)
+  
+  # Combine marker statistics with expression info
+  final_df <- data.frame(
+    gene = rownames(top_genes_df),
+    avg_log2FC = top_genes_df$avg_log2FC,
+    p_val_adj = top_genes_df$p_val_adj,
+    pct_in_cell_type = top_genes_df$pct.1 * 100,
+    pct_in_others = top_genes_df$pct.2 * 100
+  ) %>%
+    left_join(exp_info, by = "gene")
+  
+  # Store gene list
+  top_genes_list[[cell_type]] <- final_df$gene
+  
+  # Print top 10 markers with expression info
+  cat(sprintf("\nTop 10 %s markers:\n", cell_type))
+  print(head(final_df, 10))
+  
+  # Save detailed gene lists
+  write.csv(final_df,
+            file = sprintf("top_100_%s_genes_with_expression.csv", 
+                         gsub("[/ ]", "_", tolower(cell_type))),
+            row.names = FALSE)
+}
+
+# Create a combined table with expression info for all cell types
+combined_expression_table <- data.frame()
+
+for(cell_type in cell_types) {
+  genes <- top_genes_list[[cell_type]]
+  exp_info <- get_expression_info(invitro.cells.combined.ref, genes, cell_type)
+  
+  # Add cell type specific columns
+  colnames(exp_info) <- c("gene",
+                         paste0(gsub("[/ ]", "_", tolower(cell_type)), "_pct_expressed"),
+                         paste0(gsub("[/ ]", "_", tolower(cell_type)), "_avg_expression"))
+  
+  if(nrow(combined_expression_table) == 0) {
+    combined_expression_table <- exp_info
+  } else {
+    combined_expression_table <- full_join(combined_expression_table, exp_info, by = "gene")
+  }
+}
+
+# Save combined expression table
+write.csv(combined_expression_table,
+          file = "all_marker_genes_expression.csv",
+          row.names = FALSE)
+
+# Calculate scores for D0D4 object
+# First ensure the genes exist in the dataset
+genes_present <- lapply(top_genes_list, function(genes) {
+  intersect(genes, rownames(cells.combined.p12))
+})
+
+# Print number of genes found for each cell type
+for(cell_type in names(genes_present)) {
+  cat(sprintf("Number of %s genes found in dataset: %d\n",
+              cell_type, length(genes_present[[cell_type]])))
+}
+
+# Calculate scores for each cell type
+for(cell_type in names(genes_present)) {
+  score_name <- gsub("[/ ]", "_", tolower(cell_type))
+ cells.combined.p12 <- AddModuleScore(
+    object = cells.combined.p12,
+    features = list(genes_present[[cell_type]]),
+    name = paste0(score_name, "_score")
+  )
+}
+
+# Create visualization with controlled scales
+# Get all score columns
+score_columns <- grep("_score1$", colnames(cells.combined.p12@meta.data), value = TRUE)
+
+# Find maximum absolute value across all scores for symmetric scaling
+max_abs_value <- max(abs(as.matrix(cells.combined.p12@meta.data[, score_columns])))
+
+# Create feature plots
+plot_list <- list()
+for(score in score_columns) {
+  plot_title <- gsub("_score1$", "", score)
+  plot_title <- gsub("_", "/", toupper(plot_title))
+  
+  p <- FeaturePlot(cells.combined.p12,
+                   features = score,
+                   reduction = "umap",
+                   order = TRUE) +
+    scale_color_gradientn(
+      colors = c("navy", "lightgrey", "red"),
+      limits = c(-max_abs_value, max_abs_value)
+    ) +
+    theme_minimal() +
+    ggtitle(plot_title) +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      axis.title = element_text(size = 12),
+      legend.title = element_text(size = 10),
+      legend.text = element_text(size = 8)
+    ) + 
+    coord_fixed()
+  
+  plot_list[[score]] <- p
+}
+
+# Combine plots using patchwork
+score_plots <- wrap_plots(plot_list, ncol = 2)
+
+# Save the plots
+ggsave("cell_type_scores.png", score_plots, width = 15, height = 14, dpi = 300)
+
+# Create categorical plots based on scores
+score_cutoff <- 0  # Adjust based on score distribution
+for(score in score_columns) {
+  category_name <- gsub("_score1$", "_category", score)
+  cell_type_name <- gsub("_score1$", "", score)
+  cells.combined.p12@meta.data[[category_name]] <- ifelse(
+    cells.combined.p12@meta.data[[score]] > score_cutoff,
+    paste("High", toupper(cell_type_name)),
+    paste("Low", toupper(cell_type_name))
+  )
+}
+
+# Create categorical UMAPs
+category_columns <- grep("_category$", colnames(cells.combined.p12@meta.data), value = TRUE)
+categorical_umaps <- DimPlot(cells.combined.p12,
+                           reduction = "umap",
+                           group.by = category_columns,
+                           ncol = 2,
+                           cols = c(
+                             "High SERUM_LIF_MESC" = "#F4D03F",
+                             "High 2I_LIF_MESC" = "#27AE60",
+                             "High MTSC" = "#F39C12",
+                             "High MXEN" = "#8E44AD",
+                             "Low SERUM_LIF_MESC" = "grey80",
+                             "Low 2I_LIF_MESC" = "grey80",
+                             "Low MTSC" = "grey80",
+                             "Low MXEN" = "grey80"
+                           )) +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    axis.title = element_text(size = 12),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8)
+  )
+
+ggsave("categorical_scores.png", categorical_umaps, width = 15, height = 14, dpi = 300)
+
+# Print score statistics
+cat("\nScore statistics:\n")
+for(score in score_columns) {
+  cat(sprintf("\n%s scores:\n", gsub("_score1$", "", toupper(score))))
+  print(summary(cells.combined.p12@meta.data[[score]]))
+}
+
+# Calculate correlation matrix between scores
+score_matrix <- as.matrix(cells.combined.p12@meta.data[, score_columns])
+correlation_matrix <- cor(score_matrix)
+cat("\nCorrelation matrix between scores:\n")
+print(correlation_matrix)
+
+# Optional: Create correlation heatmap
+correlation_plot <- pheatmap(
+  correlation_matrix,
+  display_numbers = TRUE,
+  main = "Score Correlations",
+  fontsize = 10,
+  fontsize_number = 8
+)
+
+# Save correlation heatmap
+pdf("score_correlations.pdf", width = 8, height = 8)
+print(correlation_plot)
+dev.off()
+```
+
+```{r}
+# Find DEGs between Serum/LIF mESC and mTSC from reference dataset
+Idents(invitro.cells.combined.ref) <- "new_cluster_ids"
+
+# Get Serum/LIF mESC markers (comparing to mTSC)
+mesc_markers <- FindMarkers(invitro.cells.combined.ref,
+                          ident.1 = "Serum/LIF mESC",
+                          ident.2 = "mTSC",
+                          min.pct = 0.25)
+
+# Get mTSC markers (comparing to Serum/LIF mESC)
+mtsc_markers <- FindMarkers(invitro.cells.combined.ref,
+                         ident.1 = "mTSC",
+                         ident.2 = "Serum/LIF mESC",
+                         min.pct = 0.25)
+
+# Get top 100 genes for each cell type
+mesc_genes <- rownames(mesc_markers %>%
+                     filter(avg_log2FC > 1) %>%
+                     arrange(desc(avg_log2FC)) %>%
+                     head(100))
+
+mtsc_genes <- rownames(mtsc_markers %>%
+                    filter(avg_log2FC > 1) %>%
+                    arrange(desc(avg_log2FC)) %>%
+                    head(100))
+
+# Print top genes for verification
+print("Top 10 Serum/LIF mESC markers:")
+print(head(mesc_genes, 10))
+print("\nTop 10 mTSC markers:")
+print(head(mtsc_genes, 10))
+
+# Save gene lists
+write.csv(data.frame(gene = mesc_genes), "top_100_mesc_genes.csv")
+write.csv(data.frame(gene = mtsc_genes), "top_100_mtsc_genes.csv")
+
+# Calculate scores for mTSCLC object
+# First ensure the genes exist in the dataset
+mesc_genes_present <- intersect(mesc_genes, rownames(cells.combined.p12))
+mtsc_genes_present <- intersect(mtsc_genes, rownames(cells.combined.p12))
+
+print(paste("Number of Serum/LIF mESC genes found in dataset:", length(mesc_genes_present)))
+print(paste("Number of mTSC genes found in dataset:", length(mtsc_genes_present)))
+
+# Calculate scores
+cells.combined.p12 <- AddModuleScore(
+    object = cells.combined.p12,
+    features = list(mesc_genes_present),
+    name = "mESC_score"
+)
+
+cells.combined.p12 <- AddModuleScore(
+    object = cells.combined.p12,
+    features = list(mtsc_genes_present),
+    name = "mTSC_score"
+)
+
+# Create visualization with controlled scales
+# First get the maximum absolute value for symmetric scaling
+max_abs_value <- max(abs(c(
+    cells.combined.p12$mESC_score1,
+    cells.combined.p12$mTSC_score1)))
+
+# Create plots with symmetric scales and custom colors
+p1 <- FeaturePlot(cells.combined.p12,
+                  features = "mESC_score1",
+                  reduction = "umap",
+                  order = TRUE) +
+    scale_color_gradientn(
+        colors = c("navy", "lightgrey", "red"),
+        limits = c(-max_abs_value, max_abs_value)
+    ) +
+    theme_minimal() +
+    ggtitle("Serum/LIF mESC Score") +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    )
+
+p2 <- FeaturePlot(cells.combined.p12,
+                  features = "mTSC_score1",
+                  reduction = "umap",
+                  order = TRUE) +
+    scale_color_gradientn(
+        colors = c("navy", "lightgrey", "red"),
+        limits = c(-max_abs_value, max_abs_value)
+    ) +
+    theme_minimal() +
+    ggtitle("mTSC Score") +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    )
+
+# Combine plots
+score_plots <- p1 | p2
+
+# Save the plots
+ggsave("cell_type_scores.png", score_plots, width = 15, height = 7, dpi = 300)
+
+# Create categorical plots based on scores
+score_cutoff <- 0  # You might want to adjust this based on the score distribution
+cells.combined.p12$mESC_category <- ifelse(cells.combined.p12$mESC_score1 > score_cutoff, "High mESC", "Low mESC")
+cells.combined.p12$mTSC_category <- ifelse(cells.combined.p12$mTSC_score1 > score_cutoff, "High mTSC", "Low mTSC")
+
+# Create categorical UMAPs with custom colors
+categorical_umaps <- DimPlot(cells.combined.p12,
+                           reduction = "umap",
+                           group.by = c("mESC_category", "mTSC_category"),
+                           ncol = 2,
+                           cols = c(
+                               "High mESC" = "#F4D03F",
+                               "Low mESC" = "grey80",
+                               "High mTSC" = "#F39C12",
+                               "Low mTSC" = "grey80"
+                           )) +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    )
+
+ggsave("categorical_scores.png", categorical_umaps, width = 15, height = 7, dpi = 300)
+
+# Print score statistics
+print("\nScore statistics:")
+print("Serum/LIF mESC scores:")
+print(summary(cells.combined.p12$mESC_score1))
+print("\nmTSC scores:")
+print(summary(cells.combined.p12$mTSC_score1))
+
+# Calculate correlation between scores
+score_correlation <- cor(cells.combined.p12$mESC_score1,cells.combined.p12$mTSC_score1)
+print("\nCorrelation between mESC and mTSC scores:")
+print(score_correlation)
+```
+```{r}
+# Create a modified function to calculate enrichment
+calculate_cluster_enrichment <- function(seurat_obj, gene_list, cluster_idents) {
+  # Initialize results dataframe
+  results <- data.frame()
+  
+  # Get expression matrix
+  expr_matrix <- GetAssayData(seurat_obj, slot = "data")
+  
+  # For each cluster
+  for(cluster in unique(cluster_idents)) {
+    # Get mean expression in cluster vs out of cluster
+    cluster_cells <- cluster_idents == cluster
+    
+    # Calculate mean expression for each gene in and out of cluster
+    cluster_means <- rowMeans(expr_matrix[gene_list, cluster_cells, drop = FALSE])
+    other_means <- rowMeans(expr_matrix[gene_list, !cluster_cells, drop = FALSE])
+    
+    # Perform Wilcoxon test on the gene means
+    test_result <- wilcox.test(cluster_means, other_means)
+    
+    # Add to results
+    results <- rbind(results, data.frame(
+      Cluster = cluster,
+      Mean_Expression_In_Cluster = mean(cluster_means),
+      Mean_Expression_Other = mean(other_means),
+      Fold_Change = mean(cluster_means) / mean(other_means),
+      P_Value = test_result$p.value
+    ))
+  }
+  
+  # Adjust p-values
+  results$FDR <- p.adjust(results$P_Value, method = "BH")
+  
+  # Sort by fold change
+  results <- results[order(-results$Fold_Change),]
+  
+  return(results)
+}
+
+# Calculate enrichment
+enrichment_results <- calculate_cluster_enrichment(
+  cells.combined.p12, 
+  mtsc_genes_present, 
+  cluster_ids
+)
+
+# Print results
+print("Cluster enrichment for mTSC genes:")
+print(enrichment_results)
+
+# Create visualization
+p <- ggplot(enrichment_results, 
+       aes(x = reorder(Cluster, Fold_Change), y = Fold_Change)) +
+  geom_bar(stat = "identity", aes(fill = -log10(FDR))) +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = "Cluster", 
+       y = "Fold Change",
+       title = "mTSC Gene Enrichment by Cluster",
+       fill = "-log10(FDR)") +
+  theme(axis.text.y = element_text(size = 10))
+
+# Save the plot
+ggsave("mtsc_gene_enrichment.png", p, width = 10, height = 8)
+
+# Print significant results
+print("\nSignificantly enriched clusters (FDR < 0.05):")
+print(enrichment_results[enrichment_results$FDR < 0.05,])
+```
+```{r}
+# Calculate enrichment with the previous function
+enrichment_results <- calculate_cluster_enrichment(
+  cells.combined.p12, 
+  mtsc_genes_present, 
+  cluster_ids
+)
+
+# Add more descriptive categories based on fold change
+enrichment_results$Enrichment_Level <- case_when(
+  enrichment_results$Fold_Change >= 2.0 ~ "Highly Enriched",
+  enrichment_results$Fold_Change >= 1.5 ~ "Moderately Enriched",
+  enrichment_results$Fold_Change >= 1.0 ~ "Slightly Enriched",
+  TRUE ~ "Not Enriched"
+)
+
+# Format the numeric columns
+enrichment_results$Fold_Change <- round(enrichment_results$Fold_Change, 3)
+enrichment_results$Mean_Expression_In_Cluster <- round(enrichment_results$Mean_Expression_In_Cluster, 3)
+enrichment_results$Mean_Expression_Other <- round(enrichment_results$Mean_Expression_Other, 3)
+enrichment_results$FDR <- format(enrichment_results$FDR, scientific = TRUE, digits = 3)
+
+# Add cluster size information
+cluster_sizes <- table(cluster_ids)
+enrichment_results$Cluster_Size <- cluster_sizes[match(enrichment_results$Cluster, names(cluster_sizes))]
+enrichment_results$Cluster_Percentage <- round(enrichment_results$Cluster_Size / sum(cluster_sizes) * 100, 2)
+
+# Make sure dplyr is loaded
+library(dplyr)
+
+# Reorder columns for clarity
+enrichment_results <- enrichment_results %>%
+  dplyr::select(
+    Cluster,
+    Enrichment_Level,
+    Fold_Change,
+    FDR,
+    Cluster_Size,
+    Cluster_Percentage,
+    Mean_Expression_In_Cluster,
+    Mean_Expression_Other
+  )
+
+# Save detailed results
+write.csv(enrichment_results, "mtsc_enrichment_detailed_results.csv", row.names = FALSE)
+
+# Print summary
+print("Summary of mTSC gene enrichment analysis:")
+print(enrichment_results)
+```
+
+
+```{r}
+# Ensure the query object has expression data available
+if (ncol(mTSCLC_subset.query) == 0) {
+  stop("No expression data available in mTSCLC_subset.query.")
+}
+
+# Check for the presence of gene names in the query data
+gene_of_interest <- "Nanog"  # Replace with the gene you're interested in
+
+# Check if the gene of interest is present in the query dataset
+if (!gene_of_interest %in% rownames(mTSCLC_subset.query)) {
+  stop(paste(gene_of_interest, "is not found in the mTSCLC_subset.query dataset."))
+}
+
+# Filter the high-confidence cells
+mapped_cells <- mTSCLC_subset.query[, mTSCLC_subset.query$high_conf_celltype != "Uncertain"]
+
+# Create a feature plot for the gene of interest
+feature_plot <- FeaturePlot(mapped_cells, features = gene_of_interest, 
+                             reduction = "ref.umap") + 
+  ggtitle(paste("Feature Plot for", gene_of_interest, "in Mapped Cells")) +
+  theme_minimal()
+
+# Save the plot
+ggsave(paste0("Feature_Plot_", gene_of_interest, "_Mapped_Cells.png"), 
+       feature_plot, width = 12, height = 10, dpi = 300)
+
+# Optionally, display the plot in R
+print(feature_plot)
+
+```
+
+
+
+
+
+
+
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+
+#
+#
+#
+#
+#
+#
+#
+```
+
+```{r}
+#Load the seurat object for the reference rdata
+
+invitro.cells.combined.ref <- invitro.cells.combined.clean
+
+
+# Generate the DimPlot with custom colors and labels
+p1 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids", label = TRUE)
+
+print(p1)
+
+```
+
+```{r}
+#loading packages
+plan("multicore", workers = 8) 
+options(future.globals.maxSize = 64000 * 1024^2) #for 128 GB RAM
+#load query rdata and SCT transform 
+
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+
+mTSCLC_subset.query <- subset_p12
+  
+```
+
+```{r}
+
+# Total number of cells in the Seurat object
+total_cells <- ncol(mTSCLC_subset.query)
+print(paste("Total number of cells in the dataset:", total_cells))
+
+# Count the number of cells in each cluster for SCT_snn_res.1
+cluster_counts <- mTSCLC_subset.query@meta.data %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(count = n(), .groups = 'drop')
+
+condition_counts <- mTSCLC_subset.query@meta.data %>%
+  group_by(condition) %>%
+  summarise(count = n(), .groups = 'drop')
+
+# Sum of cells across all clusters
+total_cells_from_clusters <- sum(cluster_counts$count)
+print(paste("Total number of cells from cluster counts:", total_cells_from_clusters))
+
+# Sum of cells across all clusters
+total_cells_from_condition <- sum(condition_counts$count)
+print(paste("Total number of cells from condition counts:", total_cells_from_condition))
+
+# Print both the cluster-wise counts and check for mismatches
+print("Cluster counts:")
+print(cluster_counts)
+
+# Print both the cluster-wise counts and check for mismatches
+print("Condition counts:")
+print(condition_counts)
+
+# Check if the total number of cells matches the sum of cells from clusters
+if (total_cells == total_cells_from_clusters) {
+  print("The total cell count matches the sum of cells from the clusters.")
+} else {
+  print("Warning: The total cell count does NOT match the sum of cells from the clusters.")
+}
+
+# Check if the total number of cells matches the sum of cells from clusters
+if (total_cells == total_cells_from_condition) {
+  print("The total cell count matches the sum of cells from the condition.")
+} else {
+  print("Warning: The total cell count does NOT match the sum of cells from the condition.")
+}
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+options(future.globals.maxSize = 70 * 1024^2 * 1024)  # Set to 30 GB
+
+# Store original coordinates for both reference and query
+ref_coordinates <- Embeddings(invitro.cells.combined.ref, "umap")
+original_coordinates <- Embeddings(mTSCLC_subset.query, "umap")
+
+# Run UMAP on reference with return.model=TRUE but keep original coordinates
+invitro.cells.combined.ref <- RunUMAP(
+  invitro.cells.combined.ref,
+  dims = 1:20,
+  reduction = "pca",
+  return.model = TRUE    # This is crucial for the mapping step
+)
+# Restore original reference coordinates
+invitro.cells.combined.ref[["umap"]]@cell.embeddings <- ref_coordinates
+
+# Run UMAP with return.model=TRUE but keep original coordinates for query
+mTSCLC_subset.query <- RunUMAP(
+  mTSCLC_subset.query,
+  dims = 1:20,
+  reduction = "pca",
+  return.model = TRUE    # This is crucial for the mapping step
+)
+# Replace the UMAP embeddings with the original coordinates
+mTSCLC_subset.query[["umap"]]@cell.embeddings <- original_coordinates
+
+# First, SCTransform the reference dataset
+invitro.cells.combined.ref <- SCTransform(invitro.cells.combined.ref, verbose = FALSE)
+
+# SCTransform the query dataset
+mTSCLC_subset.query <- SCTransform(mTSCLC_subset.query, verbose = FALSE)
+
+
+# Find anchors using SCT assay
+print("Finding transfer anchors...")
+cell.anchors <- FindTransferAnchors(
+  reference = invitro.cells.combined.ref,
+  query = mTSCLC_subset.query,
+  dims = 1:20,
+  reference.reduction = "pca",
+  normalization.method = "SCT",
+  features = VariableFeatures(invitro.cells.combined.ref),
+  k.filter = 200
+)
+
+# Transfer data using reference cluster information
+print("Transferring data...")
+predictions <- TransferData(
+  anchorset = cell.anchors, 
+  refdata = invitro.cells.combined.ref$new_cluster_ids,
+  dims = 1:20,
+  k.weight = 50
+)
+
+# Add predictions to query object
+mTSCLC_subset.query <- AddMetaData(mTSCLC_subset.query, metadata = predictions)
+
+# Check if the prediction score column exists
+if ("predicted.celltype.score" %in% colnames(mTSCLC_subset.query@meta.data)) {
+  score_column <- "predicted.celltype.score"
+} else if ("prediction.score.max" %in% colnames(mTSCLC_subset.query@meta.data)) {
+  score_column <- "prediction.score.max"
+} else {
+  stop("Neither 'predicted.celltype.score' nor 'prediction.score.max' found in metadata")
+}
+
+# Set a confidence threshold
+confidence_threshold <- 0.9
+
+# Add a new column for high-confidence predictions
+mTSCLC_subset.query$high_conf_celltype <- ifelse(mTSCLC_subset.query[[score_column]] > confidence_threshold,
+                                          mTSCLC_subset.query$predicted.id,
+                                          "Uncertain")
+
+# Map query to reference UMAP
+print("Mapping query to reference UMAP...")
+mTSCLC_subset.query <- MapQuery(
+  anchorset = cell.anchors, 
+  reference = invitro.cells.combined.ref, 
+  query = mTSCLC_subset.query,
+  refdata = list(celltype = "new_cluster_ids"),
+  reference.reduction = "pca", 
+  reduction.model = "umap"
+)
+
+# Create plots
+print("Creating plots...")
+# Plot 1: Original reference UMAP structure with cell types
+p4 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids",
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("Reference Cell Types (Original Structure)")
+
+# Plot 2: mTSCLC cells mapped onto reference UMAP structure
+p5 <- DimPlot(mTSCLC_subset.query, reduction = "ref.umap",
+              group.by = "predicted.id",  # Show predicted cell types
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("mTSCLC Cells Mapped to Reference Structure")
+
+# Plot 3: Original mTSCLC UMAP colored by predicted cell types
+p6 <- DimPlot(mTSCLC_subset.query, reduction = "umap",
+              group.by = "predicted.id",  # Show predicted cell types on original structure
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("mTSCLC Original Structure (Colored by Predicted Types)")
+
+# Display all plots
+print(p4)
+print(p5)
+print(p6)
+
+# Save all plots
+ggsave("1_reference_original_subset.png", p4, width = 16, height = 8, dpi = 300)
+ggsave("2_mTSCLC_mapped_to_reference_subset.png", p5, width = 16, height = 8, dpi = 300)
+ggsave("3_mTSCLC_original_with_predictions_subset.png", p6, width = 16, height = 8, dpi = 300)
+
+# Print summary of predictions
+print("Summary of predicted cell types in mTSCLC:")
+print(table(mTSCLC_subset.query$predicted.id))
+
+# Print prediction confidence summary
+print("Summary of high confidence vs uncertain predictions:")
+print(table(mTSCLC_subset.query$high_conf_celltype != "Uncertain"))
+
+# Create a heatmap of prediction scores by cell type
+predictions_summary <- aggregate(
+  mTSCLC_subset.query[[score_column]], 
+  by = list(predicted_type = mTSCLC_subset.query$predicted.id),
+  FUN = function(x) c(
+    mean = mean(x),
+    median = median(x),
+    high_conf = mean(x > confidence_threshold)
+  )
+)
+
+print("Prediction confidence by cell type:")
+print(predictions_summary)
+```
+
+
+```{r}
+# Visualize the results
+print("Creating plots...")
+p4 <- DimPlot(invitro.cells.combined.ref, reduction = "umap", group.by = "new_cluster_ids",  
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("In Vitro to mTSCLC Reference")
+
+p5 <- DimPlot(mTSCLC_subset.query, reduction = "ref.umap", group.by = "high_conf_celltype", 
+              label = TRUE, label.size = 3, repel = TRUE) + 
+  NoLegend() + 
+  ggtitle("In Vitro to mTSCLC High Confidence")
+
+# Display the combined plot
+print(p4)
+print(p5)
+
+# Save the plots
+ggsave("reference_clusters_p4_subset.png", p4, width = 16, height = 8, dpi = 300)
+ggsave("query_clusters_p5_subset.png", p5, width = 16, height = 8, dpi = 300)
+
+# Print summary of transferred labels (high confidence)
+print("Summary of transferred labels (high confidence):")
+print(table(mTSCLC_subset.query$high_conf_celltype))
+
+# Check the distribution of original conditions in the reference
+print("Distribution of original conditions in reference cell types:")
+print(table(invitro.cells.combined.ref$condition, invitro.cells.combined.ref$new_cluster_ids))
+
+# Visualize the distribution of prediction scores
+ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50) +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count")
+
+ggsave("prediction_score_distribution.png", width = 10, height = 6)
+
+# Print the column names of the metadata to help debugging
+print("Metadata column names:")
+print(colnames(mTSCLC_subset.query@meta.data))
+```
+
+
+```{r}
+# Visualization of prediction scores
+p7 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count") +
+  theme_minimal()
+
+# Add a violin plot to show distribution by predicted cell type
+p8 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = .data[[score_column]])) +
+  geom_violin(fill = "skyblue") +
+  geom_boxplot(width = 0.1) +
+  geom_hline(yintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Prediction Scores by Cell Type") +
+  xlab("Predicted Cell Type") +
+  ylab("Prediction Score")
+
+
+# Visualization of prediction scores
+p9 <-ggplot(mTSCLC_subset.query@meta.data, aes(x = .data[[score_column]])) +
+  geom_histogram(bins = 50, fill = "skyblue", color = "black") +
+  geom_vline(xintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  ggtitle("Distribution of Prediction Scores") +
+  xlab("Prediction Score") +
+  ylab("Count") +
+  theme_minimal()
+
+# Add a violin plot to show distribution by predicted cell type
+p10 <- ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = .data[[score_column]])) +
+  geom_violin(fill = "skyblue") +
+  geom_boxplot(width = 0.1) +
+  geom_hline(yintercept = confidence_threshold, color = "red", linetype = "dashed") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle("Prediction Scores by Cell Type") +
+  xlab("Predicted Cell Type") +
+  ylab("Prediction Score")
+
+# Display all plots
+print(p7)
+print(p8)
+print(p9)
+print(p10)
+
+# Save all plots
+ggsave("Distribution of scores_subset.png", p7, width = 16, height = 8, dpi = 300)
+ggsave("Violin of scores_subset.png", p8, width = 16, height = 8, dpi = 300)
+ggsave("Distribution of cell types_subset.png", p9, width = 16, height = 8, dpi = 300)
+ggsave("Violin of cell types_subset.png", p10, width = 16, height = 8, dpi = 300)
+```
+
+
+```{r}
+# Get total number of cells
+total_cells <- ncol(mTSCLC_subset.query)
+
+# All predictions (including uncertain)
+print("All predictions (including low confidence):")
+all_predictions <- table(mTSCLC_subset.query$predicted.id)
+print(all_predictions)
+print(paste("Total cells:", total_cells))
+print(paste("Percentage of total cells:"))
+print(round(prop.table(all_predictions) * 100, 2))
+
+# High confidence predictions only
+print("\nHigh confidence predictions only:")
+high_conf_predictions <- table(mTSCLC_subset.query$predicted.id[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+print(high_conf_predictions)
+print(paste("Total high confidence cells:", sum(high_conf_predictions)))
+print(paste("Percentage of total cells that are high confidence:"))
+print(round(prop.table(high_conf_predictions) * 100, 2))
+
+# Create a comparison data frame
+comparison_df <- data.frame(
+  Cell_Type = names(all_predictions),
+  Total_Predictions = as.numeric(all_predictions),
+  High_Confidence = as.numeric(high_conf_predictions[names(all_predictions)]),
+  row.names = NULL
+)
+
+# Calculate percentages and differences
+comparison_df <- comparison_df %>%
+  mutate(
+    Percent_Total = round(Total_Predictions / total_cells * 100, 2),
+    Percent_High_Conf = round(High_Confidence / total_cells * 100, 2),
+    Percent_Confident = round(High_Confidence / Total_Predictions * 100, 2)
+  )
+
+# Print formatted comparison table
+print("\nDetailed comparison:")
+print(comparison_df)
+
+# Optional: Create a visualization of the comparison
+ggplot(comparison_df, aes(x = Cell_Type)) +
+  geom_bar(aes(y = Total_Predictions, fill = "All Predictions"), stat = "identity", position = "dodge", alpha = 0.6) +
+  geom_bar(aes(y = High_Confidence, fill = "High Confidence"), stat = "identity", position = "dodge", alpha = 0.8) +
+  scale_fill_manual(values = c("All Predictions" = "grey", "High Confidence" = "darkblue")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Comparison of All vs High Confidence Predictions",
+       x = "Cell Type",
+       y = "Number of Cells",
+       fill = "Prediction Type")
+
+# Save the plot
+ggsave("prediction_confidence_comparison_subset.png", width = 10, height = 6)
+```
+```{r}
+# Get total number of cells
+total_cells <- 2286	
+
+# Get all unique cell types first to ensure we capture all categories
+all_cell_types <- unique(mTSCLC_subset.query$predicted.id)
+
+# Create the counts separately first
+total_pred_table <- table(mTSCLC_subset.query$predicted.id)
+high_conf_table <- table(mTSCLC_subset.query$predicted.id[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+
+# Create a data frame with all cell types and fill in the counts
+comparison_df <- data.frame(
+  Cell_Type = all_cell_types,
+  Total_Predictions = as.numeric(total_pred_table[all_cell_types]),
+  High_Confidence = 0  # Initialize with zeros
+) 
+
+# Fill in high confidence counts where they exist
+high_conf_cell_types <- names(high_conf_table)
+comparison_df$High_Confidence[match(high_conf_cell_types, comparison_df$Cell_Type)] <- 
+  as.numeric(high_conf_table)
+
+# Calculate percentages
+comparison_df <- comparison_df %>%
+  mutate(
+    Percent_Total = round(Total_Predictions / total_cells * 100, 2),
+    Percent_High_Conf = round(High_Confidence / total_cells * 100, 2),
+    Percent_Confident = round(High_Confidence / Total_Predictions * 100, 2)
+  )
+
+# Create labels for the legend
+total_count <- sum(comparison_df$Total_Predictions)
+high_conf_count <- sum(comparison_df$High_Confidence)
+total_percent <- round(total_count/total_cells * 100, 1)
+high_conf_percent <- round(high_conf_count/total_cells * 100, 1)
+
+legend_labels <- c(
+  `All Predictions` = paste0("All Predictions\n(", total_count, " cells, ", total_percent, "%)"),
+  `High Confidence` = paste0("High Confidence\n(", high_conf_count, " cells, ", high_conf_percent, "%)")
+)
+
+# Create the visualization
+ggplot(comparison_df, aes(x = Cell_Type)) +
+  geom_bar(aes(y = Total_Predictions, fill = "All Predictions"), 
+           stat = "identity", 
+           position = "dodge", 
+           alpha = 0.6) +
+  geom_bar(aes(y = High_Confidence, fill = "High Confidence"), 
+           stat = "identity", 
+           position = "dodge", 
+           alpha = 0.8) +
+  scale_fill_manual(
+    values = c("All Predictions" = "grey", "High Confidence" = "darkblue"),
+    labels = legend_labels
+  ) +
+  scale_y_continuous(
+    limits = c(0, total_cells),
+    expand = c(0, 0),
+    breaks = seq(0, total_cells, by = 2000)
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 16),  # Increased size from default
+    legend.position = "top",
+    legend.box.spacing = unit(0.5, "cm"),
+    legend.text = element_text(size = 16),
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 16)
+) +
+  labs(
+    title = "Comparison of All vs High Confidence Predictions",
+    subtitle = paste0("Total cells analyzed: ", total_cells),
+    x = "Cell Type",
+    y = "Number of Cells",
+    fill = "Prediction Type"
+  )
+
+# Save the plot
+ggsave(
+  "prediction_confidence_comparison_subset2.png", 
+  width = 12, 
+  height = 8, 
+  dpi = 300
+)
+
+# Print summary statistics
+print("Summary Statistics:")
+print(paste("Total cells analyzed:", total_cells))
+print(paste("Total high confidence cells:", high_conf_count))
+print(paste("Percent high confidence:", high_conf_percent, "%"))
+print("\nDetailed statistics by cell type:")
+print(comparison_df)
+
+# Save detailed statistics
+write.csv(comparison_df, "cell_type_prediction_statistics_subset.csv", row.names = FALSE)
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+library(ggrepel)
+library(dplyr)
+library(viridis)
+
+# Define custom colors for cell types using your color scheme
+cell_colors <- c(
+  "mXEN" = "#D98880",
+  "mTSC" = "#F39C12",
+  "Serum/LIF mESC" = "#F4D03F",
+  "2i/LIF mESC" = "#52BE80",
+  "Amniotic Mesoderm" = "#5DADE2",
+  "Amniotic Ectoderm" = "#AF7AC5",
+  "Uncertain" = "#515151"  # Keep grey for uncertain cells
+)
+
+# 1. Reference structure
+p1 <- DimPlot(invitro.cells.combined.ref, 
+              reduction = "umap",
+              group.by = "new_cluster_ids", 
+              label = FALSE, 
+              repel = TRUE,
+              cols = cell_colors) +
+  ggtitle("Reference Structure") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  )
+
+# 2. Original structure with all predictions
+p2_all <- DimPlot(mTSCLC_subset.query, 
+                  reduction = "umap",
+                  group.by = "predicted.id", 
+                  label = FALSE, 
+                  repel = TRUE,
+                  cols = cell_colors) +
+  ggtitle("All Predictions") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  )
+
+# 3. High confidence predictions with layered plotting
+umap_coords <- Embeddings(mTSCLC_subset.query, "umap")
+plot_data <- data.frame(
+  UMAP_1 = umap_coords[,1],
+  UMAP_2 = umap_coords[,2],
+  celltype = mTSCLC_subset.query$high_conf_celltype
+)
+
+p2_high_conf <- ggplot(plot_data, aes(x = UMAP_1, y = UMAP_2, color = celltype)) +
+  # Plot uncertain cells first
+  geom_point(data = subset(plot_data, celltype == "Uncertain"),
+             color = "#515151", alpha = 0.2, size = 0.5) +
+  # Plot high confidence cells on top
+  geom_point(data = subset(plot_data, celltype != "Uncertain"),
+             size = 1,
+             alpha = 0.6) +
+  scale_color_manual(values = cell_colors) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 20),
+    legend.key.size = unit(5, "lines"),
+    legend.title = element_blank()
+  ) + 
+  guides(color = guide_legend(override.aes = list(size = 6, alpha = 1))) +
+  ggtitle("High Confidence Cell Type Predictions") + 
+  coord_fixed()
+
+# Create a combined plot
+combined_plot <- p1 | p2_all | p2_high_conf
+
+# Save plots
+ggsave("1_reference_structure_subset.png", p1, width = 10, height = 8, dpi = 300)
+ggsave("2_all_predictions_subset.png", p2_all, width = 10, height = 8, dpi = 300)
+ggsave("3_high_confidence_predictions_subset.png", p2_high_conf, width = 10, height = 8, dpi = 300)
+ggsave("combined_umap_visualization_subset.png", combined_plot, width = 24, height = 8, dpi = 300)
+
+# Print cell type statistics
+print("All predictions (including uncertain):")
+print(table(mTSCLC_subset.query$predicted.id))
+
+print("\nHigh confidence predictions only:")
+high_conf_counts <- table(mTSCLC_subset.query$high_conf_celltype[mTSCLC_subset.query$high_conf_celltype != "Uncertain"])
+print(high_conf_counts)
+
+# Calculate and print percentages
+total_cells <- sum(table(mTSCLC_subset.query$high_conf_celltype))
+percentages <- (table(mTSCLC_subset.query$high_conf_celltype) / total_cells) * 100
+
+print("\nPercentages of each cell type:")
+print(round(percentages, 2))
+
+# Create a summary data frame
+summary_df <- data.frame(
+  CellType = names(high_conf_counts),
+  Count = as.numeric(high_conf_counts),
+  Percentage = round(as.numeric(high_conf_counts) / sum(high_conf_counts) * 100, 2)
+)
+
+# Save summary statistics
+write.csv(summary_df, "cell_type_summary_subset.csv", row.names = FALSE)
+```
+```{r}
+cluster_color_palette <- c(
+  "mXEN" = "#D98880",
+  "mTSC" = "#F39C12",
+  "Serum/LIF mESC" = "#F4D03F",
+  "2i/LIF mESC" = "#52BE80",
+  "Amniotic Mesoderm" = "#5DADE2",
+  "Amniotic Ectoderm" = "#AF7AC5",
+  "Uncertain" = "#515151"  # Keep grey for uncertain cells
+)
+# Stacked bar chart of cell type proportions
+ggplot(data.frame(celltype = mTSCLC_subset.query$high_conf_celltype), aes(x = "All", fill = celltype)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = cluster_color_palette) +
+  theme_minimal() +
+  ggtitle("Proportion of Predicted Cell Types")
+
+# Prediction score distributions by cell type
+ggplot(mTSCLC_subset.query@meta.data, aes(x = predicted.id, y = prediction.score.max)) +
+  geom_violin(aes(fill = predicted.id)) +
+  geom_boxplot(width = 0.1) +
+  scale_fill_manual(values = cluster_color_palette) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(ggtext)
+
+# Define extended color palette for clusters
+color_palette <- c(
+  "#FFD700",  # Gold (Topaz-like)
+  "#FF8C00",  # Dark Orange (Citrine-like)
+  "#FF4500",  # Orange Red (Fire Opal-like)
+  "#DC143C",  # Crimson (Ruby-like)
+  "#8B0000",  # Dark Red 
+  "#800080",  # Purple (Alexandrite-like)
+  "#4B0082",  # Indigo (Sapphire-like)
+  "#9400D3",  # Dark Violet (Amethyst-like)
+  "#6A5ACD",  # Slate Blue (Tanzanite-like)
+  "#4682B4",  # Steel Blue (Aquamarine-like)
+  "#00BFFF",  # Deep Sky Blue (Blue Topaz-like)
+  "#008080",  # Teal (Emerald-like)
+  "#20B2AA",  # Light Sea Green (Turquoise-like)
+  "#32CD32",  # Lime Green (Peridot-like)
+  "#00FF00"   # Bright Lime
+)
+
+# Filter for high confidence predictions
+high_conf_data <- mTSCLC_subset.query@meta.data %>%
+  filter(high_conf_celltype != "Uncertain") %>%
+  mutate(cluster = as.character(SCT_snn_res.0.6))
+
+# Calculate number of cells per cluster and predicted cell type
+cluster_celltype_counts <- table(high_conf_data$cluster,
+                               high_conf_data$high_conf_celltype)
+
+# Calculate percentages
+celltype_cluster_percentages <- prop.table(cluster_celltype_counts, margin = 2) * 100
+
+# Convert to data frame
+df <- as.data.frame(celltype_cluster_percentages)
+colnames(df) <- c("Cluster", "CellType", "Percentage")
+
+# Add count information
+df$Count <- as.vector(cluster_celltype_counts)
+
+# Calculate total cells per cell type
+total_cells_per_celltype <- colSums(cluster_celltype_counts)
+
+# Add total cells per cell type to the dataframe
+df$TotalInCellType <- total_cells_per_celltype[df$CellType]
+
+# Function to create a single pie chart
+create_pie_chart <- function(cell_type) {
+  celltype_data <- df[df$CellType == cell_type,]
+  
+  # Create custom labels with counts and percentages
+  custom_labels <- paste0(
+    "Cluster ", celltype_data$Cluster, 
+    "\n(", celltype_data$Count, "/", celltype_data$TotalInCellType, ")",
+    "\n", sprintf("%.1f%%", celltype_data$Percentage)
+  )
+  
+  total_cells <- sum(celltype_data$Count)
+  
+  p <- ggplot(celltype_data, aes(x = "", y = Percentage, fill = Cluster)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    scale_fill_manual(values = color_palette[1:length(unique(df$Cluster))],
+                     labels = custom_labels) +
+    theme_void() +
+    theme(
+      legend.position = "right",
+      legend.title = element_text(size = 16),
+      legend.text = element_text(size = 12),
+      legend.key.size = unit(2, "cm"),
+      plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 16, hjust = 0.5)
+    ) +
+    ggtitle(cell_type) +
+    labs(subtitle = paste("Total high confidence cells:", total_cells)) +
+    guides(fill = guide_legend(title = "Cluster\n(Count/Total)\nPercentage",
+                             override.aes = list(size = 1)))
+  
+  return(p)
+}
+
+# Create pie charts for each cell type
+pie_charts <- lapply(sort(unique(df$CellType)), create_pie_chart)
+
+# Arrange pie charts in a grid
+grid_arranged <- grid.arrange(grobs = pie_charts, ncol = 3)
+
+# Save the grid of pie charts
+ggsave("high_confidence_celltype_by_cluster_pie_charts_Subset.png",
+       grid_arranged,
+       width = 30,
+       height = 20,
+       units = "in",
+       dpi = 300)
+
+# Save data to CSV
+write.csv(df, "high_confidence_celltype_by_cluster_percentages_and_counts_subset.csv",
+          row.names = FALSE)
+
+# Print summaries
+print("Summary of high confidence predictions by cluster:")
+print(table(high_conf_data$cluster, high_conf_data$high_conf_celltype))
+
+print("\nCluster contribution to each cell type (%):")
+print(celltype_cluster_percentages)
+
+print("\nTotal cells per cell type:")
+print(total_cells_per_celltype)
+
+# Additional analysis: Cluster composition
+print("\nPercentage of each cluster that is high confidence:")
+cluster_totals <- table(mTSCLC_subset.query$SCT_snn_res.0.6)
+high_conf_by_cluster <- table(high_conf_data$cluster)
+cluster_percentages <- (high_conf_by_cluster / cluster_totals) * 100
+print(cluster_percentages)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(pheatmap)
+library(RColorBrewer)
+
+cluster_color_palette <- c(
+  "#FFD700",  # Gold (Topaz-like)
+  "#FF8C00",  # Dark Orange (Citrine-like)
+  "#FF4500",  # Orange Red (Fire Opal-like)
+  "#DC143C",  # Crimson (Ruby-like)
+  "#8B0000",  # Dark Red 
+  "#800080",  # Purple (Alexandrite-like)
+  "#4B0082",  # Indigo (Sapphire-like)
+  "#9400D3",  # Dark Violet (Amethyst-like)
+  "#6A5ACD",  # Slate Blue (Tanzanite-like)
+  "#4682B4",  # Steel Blue (Aquamarine-like)
+  "#00BFFF",  # Deep Sky Blue (Blue Topaz-like)
+  "#008080",  # Teal (Emerald-like)
+  "#20B2AA",  # Light Sea Green (Turquoise-like)
+  "#32CD32",  # Lime Green (Peridot-like)
+  "#00FF00"   # Bright Lime
+)
+
+# Reshape the data for the heatmap
+heatmap_data <- final_counts %>%
+  select(Cluster, predicted.celltype, percentage_after) %>%
+  pivot_wider(names_from = predicted.celltype, values_from = percentage_after, values_fill = list(percentage_after = 0))
+
+# Add Amniotic Mesoderm column with 0%
+heatmap_data$`Amniotic Mesoderm` <- 0
+
+# Ensure all cell types of interest are present
+for (cell_type in cell_types_of_interest) {
+  if (!(cell_type %in% colnames(heatmap_data))) {
+    heatmap_data[[cell_type]] <- 0
+  }
+}
+
+# Convert to matrix while preserving row names
+heatmap_matrix <- as.matrix(heatmap_data %>% column_to_rownames("Cluster"))
+
+# Reorder columns to match cell_types_of_interest
+heatmap_matrix <- heatmap_matrix[, cell_types_of_interest]
+
+print("Heatmap Matrix dimensions:")
+print(dim(heatmap_matrix))
+print("Heatmap Matrix row names:")
+print(rownames(heatmap_matrix))
+print("Heatmap Matrix column names:")
+print(colnames(heatmap_matrix))
+
+# Create annotations
+col_annotation <- data.frame(CellType = factor(colnames(heatmap_matrix), levels = cell_types_of_interest))
+rownames(col_annotation) <- colnames(heatmap_matrix)
+
+row_annotation <- data.frame(Cluster = factor(rownames(heatmap_matrix)))
+rownames(row_annotation) <- rownames(heatmap_matrix)
+
+print("Column Annotation:")
+print(col_annotation)
+print("Row Annotation:")
+print(row_annotation)
+
+# Define color palettes
+celltype_colors <- setNames(
+  colorRampPalette(cell_type_colors)(length(cell_types_of_interest)),
+  cell_types_of_interest
+)
+
+print("Cell Type Colors:")
+print(celltype_colors)
+
+cluster_colors <- setNames(
+  cluster_color_palette[1:nrow(heatmap_matrix)],
+  rownames(heatmap_matrix)
+)
+
+print("Cluster Colors:")
+print(cluster_colors)
+
+# Define annotation colors
+annotation_colors <- list(
+  CellType = celltype_colors,
+  Cluster = cluster_colors
+)
+
+print("Annotation Colors:")
+print(str(annotation_colors))
+
+# Create the heatmap
+png("mTSCLC_celltype_percentage_heatmap_fixed.png", width = 6000, height = 5000, res = 300)
+pheatmap(heatmap_matrix,
+         display_numbers = TRUE,
+         number_format = "%.2f%%",
+         number_color = "white",
+         cluster_rows = TRUE,
+         cluster_cols = FALSE,
+         color = colorRampPalette(c("#000080", "#4682B4", "#800020"))(100),
+         main = "In Vitro Cell Types Identified in mTSCLC clusters",
+         fontsize = 20,
+         fontsize_number = 20,
+         cellwidth = 100,
+         cellheight = 60,
+         angle_col="45",
+         annotation_col = col_annotation,
+         annotation_row = row_annotation,
+         annotation_colors = annotation_colors,
+                  annotation_names_row = FALSE,
+         annotation_names_col = FALSE,
+         border_color = "darkgrey",
+          show_rownames = TRUE,
+                  treeheight_row = 400,
+         treeheight_col = 0,
+         fontsize_row = 18,
+         fontsize_col = 18)
+dev.off()
+
+print("Heatmap creation attempt completed.")
+```
+```{r}
+# Density plots of prediction scores
+ggplot(mTSCLC_subset.query@meta.data, aes(x = prediction.score.max)) +
+  geom_density(aes(fill = predicted.id), alpha = 0.5) +
+  facet_wrap(~predicted.id) +
+  scale_fill_manual(values = cluster_color_palette)
+
+# Spatial distribution of prediction confidence
+FeaturePlot(mTSCLC_subset.query, 
+           features = "prediction.score.max",
+           reduction = "umap")
+```
+
+```{r}
+# Find DEGs between Serum/LIF mESC and mTSC from reference dataset
+Idents(invitro.cells.combined.ref) <- "new_cluster_ids"
+
+# Get Serum/LIF mESC markers (comparing to mTSC)
+mesc_markers <- FindMarkers(invitro.cells.combined.ref, 
+                          ident.1 = "Serum/LIF mESC", 
+                          ident.2 = "mTSC", 
+                          min.pct = 0.25)
+
+# Get mTSC markers (comparing to Serum/LIF mESC)
+mtsc_markers <- FindMarkers(invitro.cells.combined.ref, 
+                         ident.1 = "mTSC", 
+                         ident.2 = "Serum/LIF mESC", 
+                         min.pct = 0.25)
+
+# Get top 100 genes for each cell type
+mesc_genes <- rownames(mesc_markers %>% 
+                    filter(avg_log2FC > 0) %>% 
+                    arrange(desc(avg_log2FC)) %>% 
+                    head(100))
+
+mtsc_genes <- rownames(mtsc_markers %>% 
+                    filter(avg_log2FC > 0) %>% 
+                    arrange(desc(avg_log2FC)) %>% 
+                    head(100))
+
+# Print top genes for verification
+print("Top 10 Serum/LIF mESC markers:")
+print(head(mesc_genes, 10))
+print("\nTop 10 mTSC markers:")
+print(head(mtsc_genes, 10))
+
+# Save gene lists
+write.csv(data.frame(gene = mesc_genes), "top_100_mesc_genes_subset.csv")
+write.csv(data.frame(gene = mtsc_genes), "top_100_mtsc_genes_subset.csv")
+# First calculate module scores on the full dataset
+# First ensure the genes exist in the full dataset
+mesc_genes_present <- intersect(mesc_genes, rownames(cells.combined.p12))
+mtsc_genes_present <- intersect(mtsc_genes, rownames(cells.combined.p12))
+
+print(paste("Number of Serum/LIF mESC genes found in dataset:", length(mesc_genes_present)))
+print(paste("Number of mTSC genes found in dataset:", length(mtsc_genes_present)))
+
+# Calculate scores on the full dataset
+cells.combined.p12 <- AddModuleScore(
+    object = cells.combined.p12,
+    features = list(mesc_genes_present),
+    name = "mESC_score")
+
+cells.combined.p12 <- AddModuleScore(
+    object = cells.combined.p12,
+    features = list(mtsc_genes_present),
+    name = "mTSC_score")
+
+# Now subset using your original code
+clusters_of_interest <- c("2", "4", "6", "7")
+subset_p12 <- subset(x = cells.combined.p12, 
+                    subset = SCT_snn_res.0.6 %in% clusters_of_interest)  
+
+# Verify the subsetting worked
+table(Idents(subset_p12))
+
+# Normalize and scale the data
+subset_p12 <- NormalizeData(subset_p12)
+subset_p12 <- ScaleData(subset_p12)
+
+# Run PCA
+subset_p12 <- RunPCA(subset_p12)
+
+# Run UMAP on the subset
+subset_p12 <- RunUMAP(subset_p12, dims = 1:20)
+
+# Create visualization of the subset using your previous color scheme
+color_palette_subset <- c(
+  "2" = "#DC143C",  # Cluster 2 - Crimson
+  "4" = "#4B0082",  # Cluster 4 - Indigo
+  "6" = "#4682B4",  # Cluster 6 - Steel Blue
+  "7" = "#008080"   # Cluster 7 - Teal
+)
+
+# First get the maximum absolute value for symmetric scaling
+max_abs_value <- max(abs(c(
+    subset_p12$mESC_score1,
+    subset_p12$mTSC_score1)))
+
+# Create plots with symmetric scales and custom colors
+p1 <- FeaturePlot(subset_p12,
+                  features = "mESC_score1",
+                  reduction = "umap",
+                  order = TRUE) +
+    scale_color_gradientn(
+        colors = c("navy", "lightgrey", "red"),
+        limits = c(-max_abs_value, max_abs_value)
+    ) +
+    theme_minimal() +
+    ggtitle("Serum/LIF mESC Score") +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    ) +
+    coord_fixed()
+
+p2 <- FeaturePlot(subset_p12,
+                  features = "mTSC_score1",
+                  reduction = "umap",
+                  order = TRUE) +
+    scale_color_gradientn(
+        colors = c("navy", "lightgrey", "red"),
+        limits = c(-max_abs_value, max_abs_value)
+    ) +
+    theme_minimal() +
+    ggtitle("mTSC Score") +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    ) +
+    coord_fixed()
+
+# Combine plots
+score_plots <- p1 | p2
+
+# Save the plots
+ggsave("cell_type_scores_subset_preserved.png", score_plots, width = 15, height = 7, dpi = 300)
+
+# Create categorical plots based on scores
+score_cutoff <- 0  # You might want to adjust this based on the score distribution
+subset_p12$mESC_category <- ifelse(subset_p12$mESC_score1 > score_cutoff, "High mESC", "Low mESC")
+subset_p12$mTSC_category <- ifelse(subset_p12$mTSC_score1 > score_cutoff, "High mTSC", "Low mTSC")
+
+# Create categorical UMAPs with custom colors
+categorical_umaps <- DimPlot(subset_p12,
+                           reduction = "umap",
+                           group.by = c("mESC_category", "mTSC_category"),
+                           ncol = 2,
+                           cols = c(
+                               "High mESC" = "#F4D03F",
+                               "Low mESC" = "grey80",
+                               "High mTSC" = "#F39C12",
+                               "Low mTSC" = "grey80"
+                           )) +
+    theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.title = element_text(size = 12),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 8)
+    )
+
+ggsave("categorical_scores_subset_preserved.png", categorical_umaps, width = 15, height = 7, dpi = 300)
+
+# Print score statistics
+print("\nScore statistics:")
+print("Serum/LIF mESC scores:")
+print(summary(subset_p12$mESC_score1))
+print("\nmTSC scores:")
+print(summary(subset_p12$mTSC_score1))
+
+# Calculate correlation between scores
+score_correlation <- cor(subset_p12$mESC_score1, subset_p12$mTSC_score1)
+print("\nCorrelation between mESC and mTSC scores:")
+print(score_correlation)
+
+# Save the new Seurat object
+saveRDS(subset_p12, "subset_p12_clusters_2467_preserved_scores.rds")
+```
+
+
+```{r}
+# Ensure the query object has expression data available
+if (ncol(mTSCLC_subset.query) == 0) {
+  stop("No expression data available in mTSCLC_subset.query.")
+}
+
+# Check for the presence of gene names in the query data
+gene_of_interest <- "Nanog"  # Replace with the gene you're interested in
+
+# Check if the gene of interest is present in the query dataset
+if (!gene_of_interest %in% rownames(mTSCLC_subset.query)) {
+  stop(paste(gene_of_interest, "is not found in the mTSCLC_subset.query dataset."))
+}
+
+# Filter the high-confidence cells
+mapped_cells <- mTSCLC_subset.query[, mTSCLC_subset.query$high_conf_celltype != "Uncertain"]
+
+# Create a feature plot for the gene of interest
+feature_plot <- FeaturePlot(mapped_cells, features = gene_of_interest, 
+                             reduction = "ref.umap") + 
+  ggtitle(paste("Feature Plot for", gene_of_interest, "in Mapped Cells")) +
+  theme_minimal()
+
+# Save the plot
+ggsave(paste0("Feature_Plot_", gene_of_interest, "_Mapped_Cells.png"), 
+       feature_plot, width = 12, height = 10, dpi = 300)
+
+# Optionally, display the plot in R
+print(feature_plot)
+
+```
+```{r}
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Specify the gene of interest (Nanog)
+gene_of_interest <- "Nanog"
+
+# Check if the gene of interest is present in the query dataset
+if (!gene_of_interest %in% rownames(mTSCLC_subset.query)) {
+  stop(paste(gene_of_interest, "is not found in the mTSCLC_subset.query dataset."))
+}
+
+# Get UMAP coordinates for both datasets
+ref_umap <- Embeddings(invitro.cells.combined.clean, reduction = "umap")
+query_umap <- Embeddings(mTSCLC_subset.query, reduction = "ref.umap") # or use "umap" if ref.umap doesn't exist
+
+# Fetch expression data for Nanog for both datasets
+ref_data <- FetchData(invitro.cells.combined.clean, vars = c(gene_of_interest))
+query_data <- FetchData(mTSCLC_subset.query, vars = c(gene_of_interest))
+
+# Combine the coordinates and expression data
+combined_data <- rbind(
+  data.frame(umap_1 = ref_umap[, 1], umap_2 = ref_umap[, 2], 
+             expression = ref_data[[gene_of_interest]], source = "Reference", 
+             high_conf_celltype = invitro.cells.combined.clean$condition),
+  data.frame(umap_1 = query_umap[, 1], umap_2 = query_umap[, 2], 
+             expression = query_data[[gene_of_interest]], source = "Query", 
+             high_conf_celltype = mTSCLC_subset.query$high_conf_celltype)
+)
+
+# Remove Uncertain category from Query
+combined_data <- combined_data %>%
+  filter(!(source == "Query" & high_conf_celltype == "Uncertain"))
+
+# Create the feature plot
+feature_plot <- ggplot(combined_data, aes(x = umap_1, y = umap_2)) +
+  geom_point(data = subset(combined_data, source == "Reference"), 
+             color = "grey", alpha = 0.3, size = 1) +  # Reference data in grey
+  geom_point(data = subset(combined_data, source == "Query"), 
+             aes(color = expression), size = 1.5) +  # Query data colored by expression
+  scale_color_gradient(low = "blue", high = "red") +  # Blue to red color gradient
+  theme_minimal() +
+  ggtitle(paste("Nanog Expression in Mapped Cells")) +
+  labs(color = "Nanog Expression") +  # Color legend title
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    plot.title = element_text(size = 20, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.text = element_text(size = 12),
+    legend.key.size = unit(1.5, "lines")
+  )
+
+# Save the plot
+ggsave("Nanog_Expression_Mapped_Cells_with_Reference.png", 
+       feature_plot, width = 12, height = 10, dpi = 300)
+
+# Optionally, display the plot in R
+print(feature_plot)
+
+```
+
+
+```{r}
+# Load necessary libraries
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Specify the genes of interest
+genes_of_interest <- c("Nanog", "Pou5f1", "Sox2", "Gata3","Cdx2","Elf5")
+
+# Initialize an empty list to store plots
+plots <- list()
+
+# Loop through each gene to create individual plots
+for (gene_of_interest in genes_of_interest) {
+  
+  # Check if the gene of interest is present in the query dataset
+  if (!gene_of_interest %in% rownames(mTSCLC_subset.query)) {
+    stop(paste(gene_of_interest, "is not found in the mTSCLC_subset.query dataset."))
+  }
+
+  # Get UMAP coordinates for both datasets
+  ref_umap <- Embeddings(invitro.cells.combined.clean, reduction = "umap")
+  query_umap <- Embeddings(mTSCLC_subset.query, reduction = "ref.umap") # or use "umap" if ref.umap doesn't exist
+
+  # Fetch expression data for the gene of interest for both datasets
+  ref_data <- FetchData(invitro.cells.combined.clean, vars = c(gene_of_interest))
+  query_data <- FetchData(mTSCLC_subset.query, vars = c(gene_of_interest))
+
+  # Combine the coordinates and expression data
+  combined_data <- rbind(
+    data.frame(umap_1 = ref_umap[, 1], umap_2 = ref_umap[, 2], 
+               expression = ref_data[[gene_of_interest]], source = "Reference", 
+               high_conf_celltype = invitro.cells.combined.clean$condition),
+    data.frame(umap_1 = query_umap[, 1], umap_2 = query_umap[, 2], 
+               expression = query_data[[gene_of_interest]], source = "Query", 
+               high_conf_celltype = mTSCLC_subset.query$high_conf_celltype)
+  )
+
+  # Remove Uncertain category from Query
+  combined_data <- combined_data %>%
+    filter(!(source == "Query" & high_conf_celltype == "Uncertain"))
+
+  # Create the feature plot
+  feature_plot <- ggplot(combined_data, aes(x = umap_1, y = umap_2)) +
+    geom_point(data = subset(combined_data, source == "Reference"), 
+               color = "grey", alpha = 0.3, size = 1) +  # Reference data in grey
+    geom_point(data = subset(combined_data, source == "Query"), 
+               aes(color = expression), size = 1.5) +  # Query data colored by expression
+    scale_color_gradient(low = "blue", high = "red") +  # Blue to red color gradient
+    theme_minimal() +
+    ggtitle(paste(gene_of_interest, "Expression in Mapped Cells")) +
+    labs(color = paste(gene_of_interest, "Expression")) +  # Color legend title
+    theme(
+      panel.grid = element_blank(),
+      axis.line = element_line(color = "black"),
+      plot.title = element_text(size = 20, face = "bold"),
+      axis.title = element_text(size = 14),
+      axis.text = element_text(size = 12),
+      legend.text = element_text(size = 12),
+      legend.key.size = unit(1.5, "lines")
+    )
+
+  # Save the plot
+  plot_filename <- paste0(gene_of_interest, "_Expression_Mapped_Cells_with_Reference.png")
+  ggsave(plot_filename, feature_plot, width = 12, height = 10, dpi = 300)
+
+  # Optionally, store the plot in the list for displaying later
+  plots[[gene_of_interest]] <- feature_plot
+}
+
+# Optionally, display all plots
+for (gene in genes_of_interest) {
+  print(plots[[gene]])
+}
+```
+

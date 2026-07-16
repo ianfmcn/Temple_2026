@@ -1,0 +1,4423 @@
+---
+title: "D0-D4_v8"
+output: html_notebook
+---
+
+
+```{r}
+
+devtools::install_github("dtm2451/dittoSeq")
+
+remotes::install_github("satijalab/seurat", "seurat5", quiet = TRUE)
+install.packages("SeuratObject")
+install.packages("SoupX")
+
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(tibble)
+library(future)
+library(dittoSeq)
+library(SoupX)
+
+# Ensure DoubletFinder is installed and loaded
+if (!requireNamespace("DoubletFinder", quietly = TRUE)) {
+  devtools::install_github("chris-mcginnis-ucsf/DoubletFinder")
+}
+library(DoubletFinder)
+
+```
+
+
+```{r}
+#loading packages
+plan("multicore", workers = 8) 
+options(future.globals.maxSize = 64000 * 1024^2) #for 128 GB RAM
+plan()
+
+```
+```{r}
+options(warn=-1)
+
+```
+
+```{r}
+#directory
+getwd()
+```
+```{r}
+
+Day0.data <- Read10X(data.dir = "/Users/jasminetemplelab/Dropbox/Parast Lab/10x Genomics Single Cell/Mouse/Cell ranger etc/Cellranger v8/EpiLC_crv8/filtered_feature_bc_matrix")
+
+BMP4IWP2Day1.data <- Read10X(data.dir = "/Users/jasminetemplelab/Dropbox/Parast Lab/10x Genomics Single Cell/Mouse/Cell ranger etc/Cellranger v8/BMP4_IWP2_D1_v8/filtered_feature_bc_matrix")
+
+BMP4IWP2Day2.data <- Read10X(data.dir = "/Users/jasminetemplelab/Dropbox/Parast Lab/10x Genomics Single Cell/Mouse/Cell ranger etc/Cellranger v8/BMP4_IWP2_D2_v8/filtered_feature_bc_matrix")
+
+BMP4IWP2Day3.data <- Read10X(data.dir = "/Users/jasminetemplelab/Dropbox/Parast Lab/10x Genomics Single Cell/Mouse/Cell ranger etc/Cellranger v8/BMP4_IWP2_D3_v8/filtered_feature_bc_matrix")
+
+BMP4IWP2Day4.data <- Read10X(data.dir = "/Users/jasminetemplelab/Dropbox/Parast Lab/10x Genomics Single Cell/Mouse/Cell ranger etc/Cellranger v8/BMP4_IWP2_D4_v8/filtered_feature_bc_matrix")
+
+
+```
+
+
+```{r}
+#Create Seurat object for each day
+#filtering cells; Seurat Objects
+min_cells <- 0.001
+min_genes <- 200
+
+Day0<- CreateSeuratObject(counts = Day0.data, 
+                             min.cells =round(ncol(Day0.data)*min_cells),
+                             min.features = min_genes,
+                             project = "Mouse_SC_Day0")
+
+BMP4IWP2Day1<- CreateSeuratObject(counts = BMP4IWP2Day1.data, 
+                             min.cells =round(ncol(BMP4IWP2Day1.data)*min_cells),
+                             min.features = min_genes,
+                             project = "Mouse_SC_BMP4IWP2Day1")
+
+BMP4IWP2Day2<- CreateSeuratObject(counts = BMP4IWP2Day2.data, 
+                             min.cells =round(ncol(BMP4IWP2Day2.data)*min_cells),
+                             min.features = min_genes,
+                             project = "Mouse_SC_BMP4IWP2Day2")
+
+BMP4IWP2Day3 <- CreateSeuratObject(counts = BMP4IWP2Day3.data, 
+                             min.cells =round(ncol(BMP4IWP2Day3.data)*min_cells),
+                             min.features = min_genes,
+                             project = "Mouse_SC_BMP4IWP2Day3")
+
+BMP4IWP2Day4 <- CreateSeuratObject(counts = BMP4IWP2Day4.data, 
+                             min.cells =round(ncol(BMP4IWP2Day4.data)*min_cells),
+                             min.features = min_genes,
+                             project = "Mouse_SC_BMP4IWP2Day4")
+
+```
+
+```{r}
+BMP4IWP2Day1
+BMP4IWP2Day2
+BMP4IWP2Day3
+BMP4IWP2Day4
+Day0
+```
+
+
+```{r}
+#metadata and merging objects
+
+BMP4IWP2Day1$condition = "BMP4IWP2Day1"
+BMP4IWP2Day2$condition = "BMP4IWP2Day2"
+BMP4IWP2Day3$condition = "BMP4IWP2Day3"
+BMP4IWP2Day4$condition = "BMP4IWP2Day4"
+Day0$condition = "Day0"
+```
+
+
+```{r}
+alldata <- merge(x=Day0, y=c(BMP4IWP2Day1, BMP4IWP2Day2, BMP4IWP2Day3, BMP4IWP2Day4),
+                add.cell.ids=c("Day0","BMP4IWP2Day1", "BMP4IWP2Day2","BMP4IWP2Day3", "BMP4IWP2Day4"))
+```
+
+```{r}
+#calculate and store mitochondrial gene percentages 
+alldata <- PercentageFeatureSet(alldata, "^mt-", col.name = "percent_mito")
+#calculate and store ribosomal gene percentages
+alldata <- PercentageFeatureSet(alldata, "^Rp[sl]", col.name = "percent_ribo")
+
+
+#plot QC to identify filtering cutoff points 
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+
+VlnPlot(alldata, group.by = "condition", features = feats[1], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[2], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[3], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[4], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+
+#save QC plots pdf
+pdf("QC_D1-D4-EpiLC_xintegrate.pdf")
+
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[1], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[2], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[3], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(alldata, group.by = "condition", features = feats[4], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+dev.off()
+```
+
+
+```{r}
+
+table(alldata$condition)
+
+```
+```{r}
+#Detection based filtering
+selected_c <- WhichCells(alldata, expression = nFeature_RNA > 200) # at least 200 detected genes, can change 
+
+data.filt <- subset(alldata, cells = selected_c)
+dim(data.filt)
+table(data.filt$condition)
+
+
+```
+```{r}
+print("Before filtering:")
+alldata
+
+print("After detection based filtering:")
+data.filt
+```
+
+```{r}
+#filter cells with high proportions of mitochondrial reads & low proportions of ribosomal reads
+selected_mito <- WhichCells(data.filt, expression = percent_mito < 10) #Less than 10% mitochondrial 
+selected_ribo <- WhichCells(data.filt, expression = percent_ribo > 5) #Greater than 5% ribosomal
+
+
+# and subset the object to only keep those cells
+data.filt <- subset(data.filt, cells = selected_ribo)
+data.filt <- subset(data.filt, cells = selected_mito)
+
+data.filt[["RNA"]] <- JoinLayers(data.filt[["RNA"]])
+
+dim(data.filt)
+
+table(data.filt$condition)
+```
+
+```{r}
+print("After mitochondrial and ribosomal filtering:")
+data.filt
+```
+
+```{r}
+#save pdf for postfiltering QC plots
+pdf("postfiltering_QC_D1-D4-EpiLC_xintegrate.pdf")
+
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(data.filt, group.by = "condition", features = feats[1], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(data.filt, group.by = "condition", features = feats[2], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(data.filt, group.by = "condition", features = feats[3], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+feats <- c("nFeature_RNA", "nCount_RNA", "percent_mito", "percent_ribo")
+VlnPlot(data.filt, group.by = "condition", features = feats[4], pt.size = 0.1, ncol = 1) + 
+    NoLegend()
+dev.off()
+```
+
+```{r}
+#split by project to a list of separate seurat objects 
+project_list <- SplitObject(data.filt, split.by="condition")
+project_list
+```
+```{r}
+save(data.filt, file="data.filt_D0-D4_xintegrate.rdata")
+save(project_list, file="project_D0-D4_xintegrate.rdata")
+```
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+```
+
+```{r}
+# normalize and identify variable features for each dataset independently
+
+    x <- NormalizeData(data.filt)
+    x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 4000)
+    x <- SCTransform(x,  vars.to.regress = "percent_mito", verbose = TRUE)
+    
+    D0.D4 <- x
+
+```
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Function to identify potential doublets based on gene count and UMI count
+identify_doublets <- function(seurat_obj, gene_percentile = 0.99, umi_percentile = 0.99) {
+  n_genes <- seurat_obj$nFeature_RNA
+  n_umi <- seurat_obj$nCount_RNA
+  gene_threshold <- quantile(n_genes, gene_percentile)
+  umi_threshold <- quantile(n_umi, umi_percentile)
+  is_doublet <- n_genes > gene_threshold | n_umi > umi_threshold
+  return(is_doublet)
+}
+
+# Apply doublet detection
+D0.D4$is_doublet <- identify_doublets(D0.D4)
+
+# Print and save summary of doublet calls
+doublet_summary <- table(D0.D4$is_doublet)
+print(doublet_summary)
+write.csv(doublet_summary, "doublet_summary.csv")
+
+# Create and save a scatter plot of gene count vs UMI count
+scatter_plot <- ggplot(D0.D4@meta.data, aes(x = nCount_RNA, y = nFeature_RNA, color = is_doublet)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("FALSE" = "grey", "TRUE" = "red")) +
+  theme_minimal() +
+  labs(x = "UMI Count", y = "Gene Count", title = "Gene Count vs UMI Count")
+ggsave("gene_vs_umi_count_scatter.png", scatter_plot, width = 10, height = 8, dpi = 300)
+
+# Remove doublets
+D0.D4_singlets <- subset(D0.D4, subset = is_doublet == FALSE)
+
+# Print and save number of cells before and after doublet removal
+cell_counts <- c(
+  before = ncol(D0.D4),
+  after = ncol(D0.D4_singlets)
+)
+print(paste("Number of cells before doublet removal:", cell_counts["before"]))
+print(paste("Number of cells after doublet removal:", cell_counts["after"]))
+write.csv(cell_counts, "cell_counts_before_after_doublet_removal.csv")
+
+# Perform preprocessing on singlets
+D0.D4_singlets <- NormalizeData(D0.D4_singlets, normalization.method = "LogNormalize", scale.factor = 10000)
+D0.D4_singlets <- FindVariableFeatures(D0.D4_singlets, selection.method = "vst", nfeatures = 4000)
+D0.D4_singlets <- ScaleData(D0.D4_singlets, features = rownames(D0.D4_singlets))
+D0.D4_singlets <- RunPCA(D0.D4_singlets, features = VariableFeatures(object = D0.D4_singlets))
+
+# Save ElbowPlot
+elbow_plot <- ElbowPlot(D0.D4_singlets)
+ggsave("elbow_plot.png", elbow_plot, width = 10, height = 8, dpi = 300)
+
+# Proceed with clustering and UMAP
+D0.D4_singlets <- FindNeighbors(D0.D4_singlets, dims = 1:20)
+D0.D4_singlets <- FindClusters(D0.D4_singlets, resolution = 0.5)
+D0.D4_singlets <- RunUMAP(D0.D4_singlets, dims = 1:20)
+
+# Visualize and save the singlets UMAP
+singlets_umap <- DimPlot(D0.D4_singlets, reduction = "umap", label = TRUE) + 
+  ggtitle("Singlets after Doublet Removal")
+ggsave("singlets_umap.png", singlets_umap, width = 10, height = 8, dpi = 300)
+
+# Save the processed Seurat object
+saveRDS(D0.D4_singlets, file = "D0.D4_singlets_processed.rds")
+
+# Save session info for reproducibility
+writeLines(capture.output(sessionInfo()), "session_info.txt")
+
+print("All outputs have been saved.")
+```
+
+
+```{r}
+# Mouse cell cycle genes
+
+D0.D4 <-D0.D4_singlets
+
+s.genes <- c("Mcm5", "Pcna", "Tyms", "Fen1", "Mcm2", "Mcm4", "Rrm1", "Ung", "Gins2", "Mcm6", "Cdca7", "Dtl", "Prim1", "Uhrf1", "Mlf1ip", "Hells", "Rfc2", "Rpa2", "Nasp", "Rad51ap1", "Gmnn", "Wdr76", "Slbp", "Ccne2", "Ubr7", "Pold3", "Msh2", "Atad2", "Rad51", "Rrm2", "Cdc45", "Cdc6", "Exo1", "Tipin", "Dscc1", "Blm", "Casp8ap2", "Usp1", "Clspn", "Pola1", "Chaf1b", "Brip1", "E2f8")
+g2m.genes <- c("Hmgb2", "Cdk1", "Nusap1", "Ube2c", "Birc5", "Tpx2", "Top2a", "Ndc80", "Cks2", "Nuf2", "Cks1b", "Mki67", "Tmpo", "Cenpf", "Tacc3", "Fam64a", "Smc4", "Ccnb2", "Ckap2l", "Ckap2", "Aurkb", "Bub1", "Kif11", "Anp32e", "Tubb4b", "Gtse1", "Kif20b", "Hjurp", "Cdca3", "Hn1", "Cdc20", "Ttk", "Cdc25c", "Kif2c", "Rangap1", "Ncapd2", "Dlgap5", "Cdca2", "Cdca8", "Ect2", "Kif23", "Hmmr", "Aurka", "Psrc1", "Anln", "Lbr", "Ckap5", "Cenpe", "Ctcf", "Nek2", "G2e3", "Gas2l3", "Cbx5", "Cenpa")
+ 
+# Score cells
+D0.D4 <- CellCycleScoring(D0.D4, 
+                                       s.features = s.genes,
+                                       g2m.features = g2m.genes,
+                                       set.ident = TRUE)
+
+# Regress out cell cycle scores
+D0.D4 <- ScaleData(D0.D4, 
+                                vars.to.regress = c("S.Score", "G2M.Score"))
+# Adjust the number of PCs based on the elbow plot
+n_pcs <- 20  # Adjust this number based on the elbow plot
+
+# Run UMAP and clustering with higher resolution
+D0.D4 <- RunPCA(D0.D4, dims = 1:n_pcs)
+D0.D4 <- RunTSNE(D0.D4, dims = 1:n_pcs)
+D0.D4 <- RunUMAP(D0.D4, dims = 1:n_pcs)
+D0.D4 <- FindNeighbors(D0.D4, dims = 1:n_pcs)
+D0.D4 <- FindClusters(D0.D4, resolution = c(0.5))
+
+# Determine the number of PCs to use
+elbow_plot <- ElbowPlot(D0.D4)
+ggsave("ElbowPlot.png", elbow_plot, width = 12, height = 10)
+
+# Visualize results
+DimPlot(D0.D4, reduction = "umap")
+FeaturePlot(D0.D4, features = c("S.Score", "G2M.Score"))
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Create and save UMAP plot
+umap_plot <- DimPlot(D0.D4, reduction = "umap", label = TRUE) +
+  ggtitle("UMAP Visualization of Cell Clusters")
+ggsave("umap_clusters.png", umap_plot, width = 10, height = 8, dpi = 300)
+
+# Create and save Feature Plot for cell cycle scores
+cell_cycle_plot <- FeaturePlot(D0.D4, features = c("S.Score", "G2M.Score"), ncol = 2)
+ggsave("cell_cycle_scores.png", cell_cycle_plot, width = 15, height = 8, dpi = 300)
+
+```
+
+
+```{r}
+# Visualize the new clusters
+dimplot <- DimPlot(D0.D4, reduction = "umap", label = TRUE)
+dimplot2 <- DimPlot(D0.D4, reduction = "pca", label = TRUE)
+dimplot3 <- DimPlot(D0.D4, reduction = "tsne", label = TRUE)
+
+ggsave("DimPlot.png", dimplot, width = 12, height = 10)
+ggsave("DimPlot2.png", dimplot2, width = 12, height = 10)
+ggsave("DimPlot3.png", dimplot3, width = 12, height = 10)
+
+```
+
+
+
+```{r}
+# Define a list of resolutions to test
+resolutions <- c(0.025, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.75, 0.8, 1.0)
+
+# Initialize a data frame to store the number of clusters for each resolution
+cluster_counts <- data.frame(Resolution = numeric(), NumClusters = integer())
+
+# Loop over each resolution
+for (res in resolutions) {
+  
+  # Perform clustering at the given resolution
+  D0.D4 <- FindClusters(D0.D4, resolution = res)
+  
+  # Get the clustering result column name
+  cluster_column <- paste0("SCT_snn_res.", res)
+  
+  # Count the number of unique clusters
+  num_clusters <- length(unique(D0.D4@meta.data[[cluster_column]]))
+  
+  # Store the result in the data frame
+  cluster_counts <- rbind(cluster_counts, data.frame(Resolution = res, NumClusters = num_clusters))
+}
+
+# Print the cluster counts for each resolution
+print(cluster_counts)
+
+# Optionally, save the results to a CSV file
+write.csv(cluster_counts, "D1-D4-EpiLC_xintegrate_counts_by_resolution.csv", row.names = FALSE)
+```
+```{r}
+save(D0.D4, file="cells.combined_D0-D4.rdata")
+```
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+```
+
+```{r}
+#visualization 
+integrated_meta <- D0.D4@meta.data
+write.csv(integrated_meta,"integrated_meta_D0-D4_controls.csv")
+
+head(D0.D4@meta.data)
+
+```
+
+```{r}
+vc_cols = colorRampPalette(RColorBrewer::brewer.pal(n = 8, name = 'Spectral'))
+cols = vc_cols(27)
+
+cols
+
+
+p1 <- DimPlot(D0.D4, reduction = "umap", group.by = "condition") +
+  labs(title = "D0-D4 Samples") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right") + coord_fixed() # Position legend on the right side
+
+p2 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.025") +
+  labs(title = "D0-D4 Clusters res.0.025") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p3 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.05",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.05") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p4 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.1",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.1") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p5 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.2",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.2") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p6 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.3",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.3") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p7 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.4",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.4") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p8 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.5",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.5") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p9 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.6",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.6") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p10 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.75",label = TRUE) +
+  labs(title = "D0-D4 Clusters res.0.75") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p11 <- DimPlot(D0.D4, reduction = "pca", group.by = "SCT_snn_res.0.4",label = TRUE) +
+  labs(title = "D0-D4 Clusters PCA res.0.4") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p12 <- DimPlot(D0.D4, reduction = "pca", group.by = "condition",label = FALSE) +
+  labs(title = "D0-D4 Clusters PCA") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  + coord_fixed()# Position legend on the right side
+
+p13 <- DimPlot(D0.D4, reduction = "tsne", group.by = "SCT_snn_res.0.4",label = TRUE) +
+  labs(title = "D0-D4 Clusters tSNE res.0.4") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right")  # Position legend on the right side
+
+p14 <- DimPlot(D0.D4, reduction = "tsne", group.by = "condition",label = FALSE) +
+  labs(title = "D0-D4 Clusters tSNE") +  # Set the plot title
+  theme(plot.title = element_text(hjust = 0.5)) +  # Center the plot title
+  theme(legend.position = "right") + coord_fixed() # Position legend on the right side
+
+Day0 <- DimPlot(D0.D4, reduction = "umap", 
+        cells = rownames(D0.D4@meta.data)[which(D0.D4@meta.data$condition == "Day0")], label = FALSE,cols=rev(cols)) +
+labs(title = "Day0")  + coord_fixed()
+
+BMP4IWP2Day1 <- DimPlot(D0.D4, reduction = "umap", 
+        cells = rownames(D0.D4@meta.data)[which(D0.D4@meta.data$condition == "BMP4IWP2Day1")], label = FALSE,cols=rev(cols)) +
+labs(title = "BMP4IWP2Day1")  + coord_fixed()
+
+BMP4IWP2Day2 <- DimPlot(D0.D4, reduction = "umap", 
+        cells = rownames(D0.D4@meta.data)[which(D0.D4@meta.data$condition == "BMP4IWP2Day2")], label = FALSE,cols=rev(cols)) +
+labs(title = "BMP4IWP2Day2")  + coord_fixed()
+
+BMP4IWP2Day3 <- DimPlot(D0.D4, reduction = "umap", 
+        cells = rownames(D0.D4@meta.data)[which(D0.D4@meta.data$condition == "BMP4IWP2Day3")], label = FALSE,cols=rev(cols)) +
+labs(title = "BMP4IWP2Day3")  + coord_fixed()
+
+
+BMP4IWP2Day4 <- DimPlot(D0.D4, reduction = "umap", 
+        cells = rownames(D0.D4@meta.data)[which(D0.D4@meta.data$condition == "BMP4IWP2Day4")], label = FALSE,cols=rev(cols)) +
+labs(title = "BMP4IWP2Day4")  + coord_fixed()
+
+Day0
+BMP4IWP2Day1
+BMP4IWP2Day2
+BMP4IWP2Day3
+BMP4IWP2Day4
+
+print(p1)
+print(p2)
+print(p3)
+print(p4)
+print(p5)
+print(p6)
+print(p7)
+print(p8)
+print(p9)
+print(p10)
+print(p11)
+print(p12)
+print(p13)
+print(p14)
+
+pdf("UMAPs_D0-D4_conditions and clusters.pdf")
+
+p1
+p2
+p3
+p4
+p5
+p6
+p7
+p8
+p9
+p10
+p11
+p12
+p13
+p14
+Day0
+BMP4IWP2Day1
+BMP4IWP2Day2
+BMP4IWP2Day3
+BMP4IWP2Day4
+
+```
+
+
+```{r}
+library(clustree)
+head(D0.D4)
+
+# Generate the clustree plot
+p15 <- clustree(D0.D4, prefix = "SCT_snn_res.")
+
+# Save the plot to a PNG file
+png("D0-D4_Clustertree.png", width = 2400, height = 1600, res = 150)
+print(p15)  # Print the plot to the PNG device
+dev.off()   # Close the device
+
+```
+
+```{r}
+# Assuming D0.D4 is your Seurat object
+
+# Calculate number of cells per condition and cluster
+condition_cluster_counts <- table(D0.D4$condition, D0.D4$SCT_snn_res.0.6)
+
+# Save raw counts
+write.csv(as.data.frame.matrix(condition_cluster_counts), "raw_cell_counts_per_condition_and_cluster.csv")
+
+# Calculate percentages
+condition_cluster_percentages <- prop.table(condition_cluster_counts, margin = 1) * 100
+cluster_condition_percentages <- prop.table(condition_cluster_counts, margin = 2) * 100
+
+# Convert tables to data frames
+counts_df <- as.data.frame.matrix(condition_cluster_counts)
+condition_percentages_df <- as.data.frame.matrix(condition_cluster_percentages)
+cluster_percentages_df <- as.data.frame.matrix(cluster_condition_percentages)
+
+# Add row names as a column
+counts_df$Condition <- rownames(counts_df)
+condition_percentages_df$Condition <- rownames(condition_percentages_df)
+cluster_percentages_df$Condition <- rownames(cluster_percentages_df)
+
+# Reorder columns to have Condition first
+counts_df <- counts_df[, c(ncol(counts_df), 1:(ncol(counts_df)-1))]
+condition_percentages_df <- condition_percentages_df[, c(ncol(condition_percentages_df), 1:(ncol(condition_percentages_df)-1))]
+cluster_percentages_df <- cluster_percentages_df[, c(ncol(cluster_percentages_df), 1:(ncol(cluster_percentages_df)-1))]
+
+# Save detailed counts and percentages
+write.csv(counts_df, "cell_counts_per_condition_and_cluster.csv", row.names = FALSE)
+write.csv(condition_percentages_df, "percentage_of_condition_in_each_cluster.csv", row.names = FALSE)
+write.csv(cluster_percentages_df, "percentage_of_cluster_from_each_condition.csv", row.names = FALSE)
+
+# Calculate and save total counts per cluster and condition
+cluster_counts <- table(D0.D4$SCT_snn_res.0.6)
+cell_counts <- table(D0.D4$condition)
+
+write.csv(data.frame(Cluster = names(cluster_counts), Count = as.vector(cluster_counts)), 
+          "total_cells_per_cluster.csv", row.names = FALSE)
+write.csv(data.frame(Condition = names(cell_counts), Count = as.vector(cell_counts)), 
+          "total_cells_per_condition.csv", row.names = FALSE)
+
+# Calculate and save percentages of total cells for each cluster and condition
+total_cells <- sum(cell_counts)
+cluster_percentages <- (cluster_counts / total_cells) * 100
+condition_percentages <- (cell_counts / total_cells) * 100
+
+write.csv(data.frame(Cluster = names(cluster_percentages), Percentage = as.vector(cluster_percentages)), 
+          "percentage_of_total_cells_per_cluster.csv", row.names = FALSE)
+write.csv(data.frame(Condition = names(condition_percentages), Percentage = as.vector(condition_percentages)), 
+          "percentage_of_total_cells_per_condition.csv", row.names = FALSE)
+
+print("All CSV files have been saved in your working directory.")
+
+# Print summaries for verification
+print("Summary of cell counts per condition and cluster:")
+print(condition_cluster_counts)
+
+print("\nSummary of percentages of condition in each cluster:")
+print(condition_cluster_percentages)
+
+print("\nSummary of percentages of cluster from each condition:")
+print(cluster_condition_percentages)
+
+print("\nTotal cells per cluster:")
+print(cluster_counts)
+
+print("\nTotal cells per condition:")
+print(cell_counts)
+
+print("\nTotal number of cells:")
+print(total_cells)
+```
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(gridExtra)
+library(readr)
+library(tidyr)
+library(dplyr)
+library(scales)
+
+# Read the percentage data
+percentages <- read_csv("percentage_of_cluster_from_each_condition.csv")
+
+# Reshape the data for ggplot
+percentages_long <- percentages %>%
+  pivot_longer(cols = -Condition, names_to = "Cluster", values_to = "Percentage")
+
+# Define the color palette
+color_palette <- rev(c(
+  "#FFD700", "#FF8C00", "#DC143C", "#8B0000", "#4B0082"
+))
+
+# Define the order of conditions
+condition_order <- c("Day0", "BMP4IWP2Day1", "BMP4IWP2Day2", "BMP4IWP2Day3", "BMP4IWP2Day4")
+
+# Function to create a single pie chart
+create_pie_chart <- function(cluster_num) {
+  cluster_data <- percentages_long %>% 
+    filter(Cluster == cluster_num) %>%
+    mutate(Condition = factor(Condition, levels = condition_order)) %>%
+    arrange(Condition)
+  
+  # Create labels with percentages for the legend
+  cluster_data <- cluster_data %>%
+    mutate(LegendLabel = paste0(
+      case_when(
+        as.character(Condition) == "Day0" ~ "Day 0",
+        as.character(Condition) == "BMP4IWP2Day1" ~ "Day 1",
+        as.character(Condition) == "BMP4IWP2Day2" ~ "Day 2",
+        as.character(Condition) == "BMP4IWP2Day3" ~ "Day 3",
+        as.character(Condition) == "BMP4IWP2Day4" ~ "Day 4",
+        TRUE ~ as.character(Condition)
+      ),
+      " (", sprintf("%.1f%%", Percentage), ")"
+    ))
+  
+  ggplot(cluster_data, aes(x = "", y = Percentage, fill = Condition)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    scale_fill_manual(values = setNames(color_palette, condition_order),
+                      labels = cluster_data$LegendLabel,
+                      name = "Condition (Percentage)") +
+    theme_void() +
+    theme(legend.position = "right",
+          legend.title = element_text(size = 14, face = "bold"),
+          legend.text = element_text(size = 12),
+          legend.key.size = unit(1, "cm"),
+          plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),
+          plot.margin = margin(10, 10, 10, 10)) +
+    ggtitle(paste("Cluster", cluster_num))
+}
+
+# Create a list of pie charts
+pie_charts <- lapply(unique(percentages_long$Cluster), create_pie_chart)
+
+# Arrange pie charts in a grid
+grid_arranged <- do.call(grid.arrange, c(pie_charts, ncol = 3))
+
+# Save the grid of pie charts
+ggsave("revised_ordered_cluster_composition_pie_charts.png", grid_arranged, width = 24, height = 32, units = "in", dpi = 300)
+
+print("Revised ordered pie charts have been saved as 'revised_ordered_cluster_composition_pie_charts.png' in your working directory.")
+```
+
+
+
+
+
+```{r}
+# Assuming D0.D4 is your Seurat object
+
+# Calculate number of cells per condition and cluster
+condition_cluster_counts <- table(D0.D4$condition, D0.D4$SCT_snn_res.0.6)
+
+# Save raw counts
+write.csv(as.data.frame.matrix(condition_cluster_counts), "raw_cell_counts_per_condition_and_cluster.csv")
+
+# Calculate percentages
+condition_cluster_percentages <- prop.table(condition_cluster_counts, margin = 1) * 100
+cluster_condition_percentages <- prop.table(condition_cluster_counts, margin = 2) * 100
+
+# Convert tables to data frames
+counts_df <- as.data.frame.matrix(condition_cluster_counts)
+condition_percentages_df <- as.data.frame.matrix(condition_cluster_percentages)
+cluster_percentages_df <- as.data.frame.matrix(cluster_condition_percentages)
+
+# Add row names as a column
+counts_df$Condition <- rownames(counts_df)
+condition_percentages_df$Condition <- rownames(condition_percentages_df)
+cluster_percentages_df$Condition <- rownames(cluster_percentages_df)
+
+# Reorder columns to have Condition first
+counts_df <- counts_df[, c(ncol(counts_df), 1:(ncol(counts_df)-1))]
+condition_percentages_df <- condition_percentages_df[, c(ncol(condition_percentages_df), 1:(ncol(condition_percentages_df)-1))]
+cluster_percentages_df <- cluster_percentages_df[, c(ncol(cluster_percentages_df), 1:(ncol(cluster_percentages_df)-1))]
+
+# Save detailed counts and percentages
+write.csv(counts_df, "cell_counts_per_condition_and_cluster.csv", row.names = FALSE)
+write.csv(condition_percentages_df, "percentage_of_condition_in_each_cluster.csv", row.names = FALSE)
+write.csv(cluster_percentages_df, "percentage_of_cluster_from_each_condition.csv", row.names = FALSE)
+
+# Calculate and save total counts per cluster and condition
+cluster_counts <- table(D0.D4$SCT_snn_res.0.6)
+cell_counts <- table(D0.D4$condition)
+
+write.csv(data.frame(Cluster = names(cluster_counts), Count = as.vector(cluster_counts)), 
+          "total_cells_per_cluster.csv", row.names = FALSE)
+write.csv(data.frame(Condition = names(cell_counts), Count = as.vector(cell_counts)), 
+          "total_cells_per_condition.csv", row.names = FALSE)
+
+# Calculate and save percentages of total cells for each cluster and condition
+total_cells <- sum(cell_counts)
+cluster_percentages <- (cluster_counts / total_cells) * 100
+condition_percentages <- (cell_counts / total_cells) * 100
+
+write.csv(data.frame(Cluster = names(cluster_percentages), Percentage = as.vector(cluster_percentages)), 
+          "percentage_of_total_cells_per_cluster.csv", row.names = FALSE)
+write.csv(data.frame(Condition = names(condition_percentages), Percentage = as.vector(condition_percentages)), 
+          "percentage_of_total_cells_per_condition.csv", row.names = FALSE)
+
+print("All CSV files have been saved in your working directory.")
+
+# Print summaries for verification
+print("Summary of cell counts per condition and cluster:")
+print(condition_cluster_counts)
+
+print("\nSummary of percentages of condition in each cluster:")
+print(condition_cluster_percentages)
+
+print("\nSummary of percentages of cluster from each condition:")
+print(cluster_condition_percentages)
+
+print("\nTotal cells per cluster:")
+print(cluster_counts)
+
+print("\nTotal cells per condition:")
+print(cell_counts)
+
+print("\nTotal number of cells:")
+print(total_cells)
+```
+
+```{r}
+library(ggplot2)
+library(Seurat)
+
+# Color palette for clusters
+cluster_color_palette <- c(
+  "#FFD700", "#FF8C00", "#DC143C", "#8B0000", "#4B0082", 
+  "#6A5ACD", "#4682B4", "#008080", "#20B2AA", "#32CD32", "#FF69B4"
+)
+
+# Color palette for conditions
+condition_color_palette <- rev(c(
+  "#FFD700", "#FF8C00", "#DC143C", "#8B0000", "#4B0082"
+))
+
+# Generate the DimPlot for clusters
+p16 <- DimPlot(D0.D4, reduction = "umap", group.by = "SCT_snn_res.0.6", label = TRUE, label.size = 5) +
+  ggtitle("D0-D4 BMP4/IWP2 Treatment") +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = cluster_color_palette) +
+  coord_fixed()
+
+# Order the conditions
+condition_order <- c("Day0", "BMP4IWP2Day1", "BMP4IWP2Day2", "BMP4IWP2Day3", "BMP4IWP2Day4")
+D0.D4$condition <- factor(D0.D4$condition, levels = condition_order)
+
+# Generate the DimPlot for conditions with ordered legend and specified colors
+p17 <- DimPlot(D0.D4, reduction = "umap", group.by = "condition", label = FALSE, label.size = 5) +
+  ggtitle("D0-D4 BMP4/IWP2 Treatment") +
+  theme(legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14),
+        plot.title = element_text(face = "bold")) +
+  scale_color_manual(values = condition_color_palette,
+                     labels = c("Day 0", "Day 1", "Day 2", "Day 3", "Day 4")) +
+  coord_fixed()
+
+# Save the DimPlots as PNG files
+ggsave(filename = "D1-D4_res0.4.png", plot = p16, width = 8, height = 6, dpi = 300)
+ggsave(filename = "D1-D4_condition.png", plot = p17, width = 8, height = 6, dpi = 300)
+
+# Optionally, print the plots to the R console
+print(p16)
+print(p17)
+```
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+
+```
+
+```{r}
+
+Idents(D0.D4) <- "SCT_snn_res.0.6"
+
+DefaultAssay(D0.D4) <- "RNA"
+
+# Optionally join RNA layers if not already done
+D0.D4[["RNA"]] <- JoinLayers(D0.D4[["RNA"]])
+
+D0.D4.markers <- FindAllMarkers(D0.D4, 
+                                         group.by = "SCT_snn_res.0.6", 
+                                         only.pos = TRUE, 
+                                         min.pct = 0.2, 
+                                         logfc.threshold = 0.5)
+
+# Save marker genes to CSV file
+write.csv(D0.D4.markers, "D0-D4_markers.csv", row.names = FALSE)
+
+```
+
+```{r}
+# Scale the data and run PCA
+all.genes2 <- rownames(D0.D4)
+D0.D4 <- ScaleData(D0.D4, features = all.genes2)
+D0.D4 <- RunPCA(D0.D4, features = VariableFeatures(object = D0.D4))
+
+# Get top 5 positive features per cluster with avg_log2FC > 1
+top5_positive <- D0.D4.markers %>%
+    group_by(cluster) %>%
+    filter(avg_log2FC > 1) %>% 
+    slice_head(n = 5) %>%
+    ungroup()
+
+# Get top 5 negative features per cluster with avg_log2FC < -1
+top5_negative <- D0.D4.markers %>%
+    group_by(cluster) %>%
+    filter(avg_log2FC < -1) %>% 
+    slice_head(n = 5) %>%
+    ungroup()
+
+# Combine positive and negative markers into a single data frame
+top5_combined <- bind_rows(top5_positive, top5_negative)
+
+# Save to CSV file
+write.csv(top5_combined, file = "D0-D4_Top5_Features_Per_Cluster.csv", row.names = FALSE)
+```
+
+
+```{r}
+# Extract average expression data
+avg_expression <- AverageExpression(D0.D4, 
+                                    features = top5_combined$gene, 
+                                    group.by = "SCT_snn_res.0.6")
+
+# Create a named vector for cluster colors
+cluster_colors <- c(
+  "0" = "#FFD700", "1" = "#FF8C00", "2" = "#DC143C", "3" = "#8B0000", 
+  "4" = "#4B0082", "5" = "#6A5ACD", "6" = "#4682B4", "7" = "#008080", 
+  "8" = "#20B2AA", "9" = "#32CD32"
+)
+# Load necessary libraries
+if (!requireNamespace("pheatmap", quietly = TRUE)) install.packages("pheatmap")
+library(pheatmap)
+library(Seurat)
+library(dplyr)
+library(RColorBrewer)
+library(viridis)
+
+# Convert to matrix
+heatmap_data <- as.matrix(avg_expression$RNA)
+
+# Split genes into positive and negative
+positive_genes <- top5_combined$gene[top5_combined$avg_log2FC > 0]
+negative_genes <- top5_combined$gene[top5_combined$avg_log2FC < 0]
+
+# Reorder genes: positive genes first, then negative
+ordered_genes <- c(positive_genes, negative_genes)
+
+# Ensure ordered genes are present in the heatmap data
+if (!all(ordered_genes %in% rownames(heatmap_data))) {
+  stop("Some ordered genes are not in the heatmap data.")
+}
+
+# Reorder the heatmap data matrix based on the ordered genes
+heatmap_data_ordered <- heatmap_data[ordered_genes, ]
+
+# Scale the data
+heatmap_data_scaled <- t(scale(t(heatmap_data_ordered)))
+
+# Create the color palette
+color_palette <- colorRampPalette(c("#4575b4", "white", "#d73027"))(100)
+
+# Create the heatmap and save it directly to a file
+png("Top5_heatmap.png", width = 3000, height = 4000, res = 300)
+
+pheatmap(heatmap_data_scaled,
+         color = color_palette,
+         cluster_rows = FALSE,   # Keep gene order as provided
+         cluster_cols = FALSE,   # Keep cluster order as provided
+         show_colnames = TRUE,
+         show_rownames = TRUE,
+         fontsize_row = 8,
+         fontsize_col = 10,
+         main = "Gene Expression Across Cell Types",
+         angle_col = "0",
+         border_color = "white",
+         cellwidth = 15,
+         cellheight = 10,
+         legend = TRUE,
+         legend_breaks = c(-2, -1, 0, 1, 2),
+         legend_labels = c("-2", "-1", "0", "1", "2"),
+         treeheight_col = 0,
+         treeheight_row = 0)
+
+dev.off()
+```
+
+```{r}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+
+# Assume that you already have cells.combined and cells_combined.markers
+
+# Scale the data and run PCA
+D0.D4 <- RunPCA(D0.D4, features = VariableFeatures(object = D0.D4))
+
+
+top100_positive <- D0.D4.markers %>%
+    group_by(cluster) %>%
+    filter(avg_log2FC > 1) %>% 
+    slice_head(n = 100) %>%
+    ungroup()
+
+top100_negative <- D0.D4.markers %>%
+    group_by(cluster) %>%
+    filter(avg_log2FC < -1) %>% 
+    slice_head(n = 100) %>%
+    ungroup()
+
+# Combine positive and negative markers into a single data frame
+top100_combined <- bind_rows(top100_positive, top100_negative)
+
+# Save to CSV file
+write.csv(top100_combined, file = "D0-D4_Top100_Features_Per_Cluster.csv", row.names = FALSE)
+
+
+```
+
+```{r}
+
+library(Seurat)
+library(dendextend)
+library(colorspace)
+
+# Extract the average expression for each gene in each cluster
+clusters_avg_expr <- AverageExpression(D0.D4, assays = "RNA", 
+                                       features = VariableFeatures(D0.D4), 
+                                       group.by = "SCT_snn_res.0.6")
+
+# Use all clusters
+clusters_of_interest <- clusters_avg_expr$RNA
+
+# Calculate distance matrix
+dist_matrix <- dist(t(clusters_of_interest))
+
+# Perform hierarchical clustering
+hc <- hclust(dist_matrix, method = "ward.D2")
+
+# Create a dendrogram object
+dend <- as.dendrogram(hc)
+
+# Plot the basic dendrogram
+png("all_clusters_dendrogram.png", width = 1200, height = 800, res = 150)
+plot(dend, main = "Dendrogram of All Clusters", 
+     ylab = "Height", xlab = "Clusters")
+dev.off()
+
+# Create a colored and more visually appealing dendrogram
+num_clusters <- ncol(clusters_of_interest)
+dend_colored <- color_branches(dend, k = num_clusters)
+labels_colors(dend_colored) <- rainbow_hcl(num_clusters)
+
+png("all_clusters_dendrogram_colored.png", width = 1200, height = 800, res = 150)
+plot(dend_colored, main = "Colored Dendrogram of All Clusters",
+     ylab = "Height", xlab = "Clusters")
+dev.off()
+
+```
+```{r}
+# Load necessary libraries
+if (!requireNamespace("pheatmap", quietly = TRUE)) install.packages("pheatmap")
+library(pheatmap)
+library(Seurat)
+library(dplyr)
+library(RColorBrewer)
+library(viridis)
+
+# Extract average expression data
+avg_expression <- AverageExpression(D0.D4, 
+                                    features = top5_combined$gene, 
+                                    group.by = "SCT_snn_res.0.6")
+
+# Create a named vector for cluster colors
+cluster_colors <- c(
+  "0" = "#FFD700", "1" = "#FF8C00", "2" = "#DC143C", "3" = "#8B0000", 
+  "4" = "#4B0082", "5" = "#6A5ACD", "6" = "#4682B4", "7" = "#008080", 
+  "8" = "#20B2AA", "9" = "#32CD32"
+)
+
+# Convert to matrix
+heatmap_data <- as.matrix(avg_expression$RNA)
+
+# Determine the cluster with highest expression for each gene
+max_cluster <- apply(heatmap_data, 1, which.max)
+gene_cluster <- data.frame(Gene = rownames(heatmap_data), Cluster = colnames(heatmap_data)[max_cluster])
+
+# Reorder genes based on their max cluster
+gene_order <- gene_cluster %>%
+  arrange(Cluster) %>%
+  pull(Gene)
+
+# Reorder the heatmap data matrix based on the new gene order
+heatmap_data_ordered <- heatmap_data[gene_order, ]
+
+# Scale the data
+heatmap_data_scaled <- t(scale(t(heatmap_data_ordered)))
+
+# Create the color palette for the heatmap
+color_palette <- colorRampPalette(c("#4575b4", "white", "#d73027"))(100)
+
+# Create annotation for columns (clusters)
+column_annotation <- data.frame(Cluster = factor(colnames(heatmap_data_scaled)))
+rownames(column_annotation) <- colnames(heatmap_data_scaled)
+
+# Create annotation for rows (clusters)
+row_annotation <- data.frame(Cluster = factor(gene_cluster$Cluster[match(rownames(heatmap_data_scaled), gene_cluster$Gene)]))
+rownames(row_annotation) <- rownames(heatmap_data_scaled)
+
+# Create the heatmap and save it directly to a file
+png("Top5_heatmap_with_cluster_colors_both_sides.png", width = 3500, height = 4500, res = 300)
+
+pheatmap(heatmap_data_scaled,
+         color = color_palette,
+         cluster_rows = FALSE,   
+         cluster_cols = FALSE,   
+         show_colnames = TRUE,
+         show_rownames = TRUE,
+         fontsize_row = 8,
+         fontsize_col = 10,
+         main = "Top 5 Genes in D0D4 per Cluster",
+         angle_col = "0",
+         border_color = "white",
+         cellwidth = 15,
+         cellheight = 10,
+         legend = TRUE,
+         legend_breaks = c(-2, -1, 0, 1, 2),
+         legend_labels = c("-2", "-1", "0", "1", "2"),
+         treeheight_col = 0,
+         treeheight_row = 0,
+         annotation_col = column_annotation,
+         annotation_row = row_annotation,
+         annotation_colors = list(Cluster = cluster_colors),
+         annotation_legend = TRUE,
+         annotation_names_row = FALSE,  # This removes the row annotation title
+         annotation_names_col = FALSE)  # This removes the column annotation title
+dev.off()
+```
+```{r}
+# Load necessary libraries
+if (!requireNamespace("pheatmap", quietly = TRUE)) install.packages("pheatmap")
+library(pheatmap)
+library(Seurat)
+library(dplyr)
+library(RColorBrewer)
+library(viridis)
+
+# Extract average expression data
+avg_expression <- AverageExpression(D0.D4, 
+                                    features = top5_combined$gene, 
+                                    group.by = "SCT_snn_res.0.6")
+
+# Create a named vector for cluster colors
+cluster_colors <- c(
+  "0" = "#FFD700", "1" = "#FF8C00", "2" = "#DC143C", "3" = "#8B0000", 
+  "4" = "#4B0082", "5" = "#6A5ACD", "6" = "#4682B4", "7" = "#008080", 
+  "8" = "#20B2AA", "9" = "#32CD32"
+)
+
+# Convert to matrix
+heatmap_data <- as.matrix(avg_expression$RNA)
+
+# Scale the data
+heatmap_data_scaled <- t(scale(t(heatmap_data)))
+
+# Calculate distance and perform hierarchical clustering
+gene_dist <- dist(heatmap_data_scaled)
+gene_hclust <- hclust(gene_dist, method = "complete")
+
+# Create the color palette for the heatmap
+color_palette <- colorRampPalette(c("#4575b4", "white", "#d73027"))(100)
+
+# Create annotation for columns (clusters)
+column_annotation <- data.frame(Cluster = factor(colnames(heatmap_data_scaled), levels = c(0:10)))
+rownames(column_annotation) <- colnames(heatmap_data_scaled)
+
+# Create annotation for rows (clusters)
+row_annotation <- data.frame(Cluster = factor(gene_cluster$Cluster[match(rownames(heatmap_data_scaled), gene_cluster$Gene)], levels = c(0:10)))
+rownames(row_annotation) <- rownames(heatmap_data_scaled)
+
+# Create the heatmap and save it directly to a file
+png("Top5_heatmap_with_dendrogram_and_colorbar.png", width = 3500, height = 4500, res = 300)
+pheatmap(heatmap_data_scaled,
+         color = color_palette,
+         cluster_rows = gene_hclust,   # Use the hierarchical clustering result
+         cluster_cols = FALSE,         # Keep cluster order as provided
+         show_colnames = TRUE,
+         show_rownames = TRUE,
+         fontsize_row = 8,
+         fontsize_col = 10,
+         main = "Top 5 Genes in D0D4 per Cluster",
+         angle_col = "0",
+         border_color = "white",
+         cellwidth = 15,
+         cellheight = 10,
+         legend = TRUE,
+         legend_breaks = c(-2, -1, 0, 1, 2),
+         legend_labels = c("-2", "-1", "0", "1", "2"),
+         treeheight_col = 0,
+         treeheight_row = 100,         # Adjust this value to change dendrogram height
+         annotation_col = column_annotation,
+         annotation_row = row_annotation,
+         annotation_colors = list(Cluster = cluster_colors),
+         annotation_legend = TRUE,
+         annotation_names_row = FALSE,  # This removes the row annotation title
+         annotation_names_col = FALSE)  # This removes the column annotation titlee
+dev.off()
+```
+```{r}
+# First set up the grouping
+D0.D4$cell_group <- ifelse(D0.D4$SCT_snn_res.0.6 %in% c(1,2,5), "Embryonic",
+                          ifelse(D0.D4$SCT_snn_res.0.6 %in% c(0,4,6), "Trophoblast", "Other"))
+
+# Set identity to the new grouping
+Idents(D0.D4) <- "cell_group"
+
+# Find DEGs for Embryonic vs Trophoblast
+embryonic_markers <- FindMarkers(D0.D4,
+                               ident.1 = "Embryonic",
+                               ident.2 = "Trophoblast",
+                               min.pct = 0.25,
+                               assay = "SCT")
+
+# Find DEGs for Trophoblast vs Embryonic
+trophoblast_markers <- FindMarkers(D0.D4,
+                                 ident.1 = "Trophoblast",
+                                 ident.2 = "Embryonic",
+                                 min.pct = 0.25,
+                                 assay = "SCT")
+
+# Get top 100 genes for each group
+top_embryonic <- embryonic_markers %>%
+  filter(avg_log2FC > 0) %>%
+  arrange(desc(avg_log2FC)) %>%
+  head(100)
+
+top_trophoblast <- trophoblast_markers %>%
+  filter(avg_log2FC > 0) %>%
+  arrange(desc(avg_log2FC)) %>%
+  head(100)
+
+# Save DEG results
+write.csv(top_embryonic, "top_100_embryonic_vs_trophoblast.csv")
+write.csv(top_trophoblast, "top_100_trophoblast_vs_embryonic.csv")
+
+# Run GO analysis for embryonic genes
+embryonic_go <- enrichGO(gene = rownames(top_embryonic),
+                        OrgDb = org.Mm.eg.db,
+                        keyType = "SYMBOL",
+                        ont = "BP",
+                        pAdjustMethod = "BH",
+                        pvalueCutoff = 0.05,
+                        qvalueCutoff = 0.2)
+
+# Run GO analysis for trophoblast genes
+trophoblast_go <- enrichGO(gene = rownames(top_trophoblast),
+                          OrgDb = org.Mm.eg.db,
+                          keyType = "SYMBOL",
+                          ont = "BP",
+                          pAdjustMethod = "BH",
+                          pvalueCutoff = 0.05,
+                          qvalueCutoff = 0.2)
+
+# Save GO results
+write.csv(as.data.frame(embryonic_go), "embryonic_GO_terms.csv")
+write.csv(as.data.frame(trophoblast_go), "trophoblast_GO_terms.csv")
+
+# Create and save GO plots
+pdf("embryonic_GO_plot.pdf", width = 10, height = 8)
+barplot(embryonic_go, showCategory = 20)
+dev.off()
+
+pdf("trophoblast_GO_plot.pdf", width = 10, height = 8)
+barplot(trophoblast_go, showCategory = 20)
+dev.off()
+
+# Print summary stats
+print("Number of significant GO terms:")
+print(paste("Embryonic:", nrow(as.data.frame(embryonic_go))))
+print(paste("Trophoblast:", nrow(as.data.frame(trophoblast_go))))
+
+print("\nTop 10 embryonic genes:")
+print(head(rownames(top_embryonic), 10))
+
+print("\nTop 10 trophoblast genes:")
+print(head(rownames(top_trophoblast), 10))
+```
+
+
+```{r}
+library(ggplot2)
+library(Seurat)
+library(patchwork)
+
+# Define color palette
+# Define the color palette
+
+color_palette <- rev(c(
+  "#FFD700", "#FF8C00", "#DC143C", "#8B0000", "#4B0082"
+))
+
+# Function to create highlight plot for specific condition
+create_highlight_plot <- function(seurat_obj, highlight_condition, title, highlight_color) {
+  DimPlot(seurat_obj, 
+          reduction = "umap",
+          cells.highlight = WhichCells(seurat_obj, 
+                                     expression = condition == highlight_condition),
+          cols.highlight = highlight_color,  # Use the passed highlight color
+          cols = "grey90",                   # Other cells in light grey
+          pt.size = 0.5) +                   # Corrected from sizes to pt.size
+    ggtitle(title) +
+    theme(plot.title = element_text(face = "bold", size = 16),
+          axis.text = element_text(face = "bold")) +
+    coord_fixed()
+}
+
+# Create individual plots for each day with corresponding colors from the palette
+p0 <- create_highlight_plot(D0.D4, "Day0", "Day 0", color_palette[1])
+p1 <- create_highlight_plot(D0.D4, "BMP4IWP2Day1", "Day 1", color_palette[2])
+p2 <- create_highlight_plot(D0.D4, "BMP4IWP2Day2", "Day 2", color_palette[3])
+p3 <- create_highlight_plot(D0.D4, "BMP4IWP2Day3", "Day 3", color_palette[4])
+p4 <- create_highlight_plot(D0.D4, "BMP4IWP2Day4", "Day 4", color_palette[5])
+
+# Save individual plots as high-resolution PNGs
+ggsave("D0.D4_day0_highlight.png", plot = p0, width = 8, height = 6, dpi = 300)
+ggsave("D0.D4_day1_highlight.png", plot = p1, width = 8, height = 6, dpi = 300)
+ggsave("D0.D4_day2_highlight.png", plot = p2, width = 8, height = 6, dpi = 300)
+ggsave("D0.D4_day3_highlight.png", plot = p3, width = 8, height = 6, dpi = 300)
+ggsave("D0.D4_day4_highlight.png", plot = p4, width = 8, height = 6, dpi = 300)
+
+# Create and save combined plot as PNG
+combined_plot <- p1 + p2 + p3 + p4 + plot_layout(ncol = 2)
+ggsave("D0.D4_highlighted_days_combined.png", 
+       plot = combined_plot, 
+       width = 15, 
+       height = 12, 
+       dpi = 300)
+
+# Print combined plot
+print(combined_plot)
+```
+
+```{r}
+save(D0.D4, file="cells.combined_D0-D4_Markers.rdata")
+```
+
+
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+
+```
+```{r}
+# 1. BMP Dotplots Analysis
+# Save as: 1_bmp_dotplots.R
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Define BMP pathway components
+bmp_genes <- list(
+    ligands = c(
+        "Bmp2", "Bmp4", "Bmp5", "Bmp6", "Bmp7", "Bmp8a", "Bmp8b",
+        "Bmp10", "Bmp15", "Gdf1", "Gdf2", "Gdf3", "Gdf5", "Gdf6",
+        "Gdf7", "Gdf9", "Gdf10", "Gdf11", "Gdf15"
+    ),
+    type1_receptors = c(
+        "Bmpr1a", "Bmpr1b", "Acvr1", "Acvr1b", "Acvr1c", "Tgfbr1"
+    ),
+    type2_receptors = c(
+        "Bmpr2", "Acvr2a", "Acvr2b", "Tgfbr2"
+    ),
+    coreceptors = c(
+        "Eng", "Rgma", "Rgmb", "Rgmc", "Neo1"
+    ),
+    target_genes = c(
+        "Id1", "Id2", "Id3", "Smad6", "Smad7", "Nog", "Msx1", "Msx2"
+    )
+)
+
+create_bmp_dotplots <- function(seurat_obj, group.by = "SCT_snn_res.0.6", output_dir = "bmp_analysis") {
+    # Create output directory
+    dir.create(file.path(output_dir, "dotplots"), recursive = TRUE, showWarnings = FALSE)
+    
+    # Find expressed genes
+    genes_present <- lapply(bmp_genes, function(genes) {
+        genes[genes %in% rownames(seurat_obj)]
+    })
+    
+    # Save list of detected genes
+    write.csv(data.frame(
+        Category = rep(names(genes_present), sapply(genes_present, length)),
+        Gene = unlist(genes_present)
+    ), file.path(output_dir, "dotplots", "detected_genes.csv"))
+    
+    # Create dotplots
+    for(category in names(genes_present)) {
+        if(length(genes_present[[category]]) > 0) {
+            message(paste("Creating dotplot for:", category))
+            p <- DotPlot(seurat_obj, 
+                        features = genes_present[[category]],
+                        group.by = group.by) +
+                theme_minimal() +
+                theme(
+                    axis.text.x = element_text(angle = 45, hjust = 1, size = 20),
+                    axis.text.y = element_text(size = 20),
+                    axis.title = element_text(size = 20),
+                    plot.title = element_text(size = 24)
+                ) +
+                ggtitle(paste("Expression of", category))
+            
+            ggsave(file.path(output_dir, "dotplots", paste0(category, "_dotplot.png")), 
+                   p, width = 12, height = 8, dpi = 300)
+        }
+    }
+    
+    return(genes_present)
+}
+
+# Usage:
+genes_found <- create_bmp_dotplots(D0.D4, 
+                                  group.by = "SCT_snn_res.0.6",
+                                output_dir = "bmp_analysis")
+
+```
+
+
+```{r}
+# 2. BMP UMAPs Analysis
+# Save as: 2_bmp_umaps.R
+
+library(Seurat)
+library(ggplot2)
+
+create_bmp_umaps <- function(seurat_obj, genes_present, group.by = "SCT_snn_res.0.6", output_dir = "bmp_analysis") {
+    # Create output directory
+    dir.create(file.path(output_dir, "umaps"), recursive = TRUE, showWarnings = FALSE)
+    
+    # Get all expressed genes
+    all_expressed_genes <- unlist(genes_present)
+    
+    # Calculate pathway score
+    seurat_obj <- AddModuleScore(seurat_obj,
+                                features = list(all_expressed_genes),
+                                name = "bmp_pathway_score")
+    
+    # Overall pathway activity UMAP
+    p <- FeaturePlot(seurat_obj, 
+                     features = "bmp_pathway_score1",
+                     reduction = "umap") +
+        theme(
+            plot.title = element_text(size = 24),
+            axis.title = element_text(size = 20),
+            axis.text = element_text(size = 20)
+        ) +
+        ggtitle("BMP Pathway Activity Score")
+    
+    ggsave(file.path(output_dir, "umaps", "pathway_activity_score.png"), 
+           p, width = 10, height = 8, dpi = 300)
+    
+    # Individual gene UMAPs
+    for(gene in all_expressed_genes) {
+        p <- FeaturePlot(seurat_obj, 
+                        features = gene, 
+                        reduction = "umap") +
+            theme(
+                 plot.title = element_text(size = 24),
+            axis.title = element_text(size = 20),
+            axis.text = element_text(size = 20)
+        ) +
+            ggtitle(gene)
+        
+        ggsave(file.path(output_dir, "umaps", paste0(gene, "_umap.png")), 
+               p, width = 8, height = 6, dpi = 300)
+    }
+    
+    return(seurat_obj)
+}
+
+# Usage:
+ seurat_obj <- create_bmp_umaps(D0.D4,
+                              genes_present = genes_found,  # from previous script
+                             group.by = "SCT_snn_res.0.6",
+                           output_dir = "bmp_analysis")
+ 
+```
+
+```{r}
+# 3. BMP Heatmaps Analysis with fixed sorting
+library(Seurat)
+library(pheatmap)
+library(ggplot2)
+
+create_safe_heatmap <- function(matrix_data, filename, title, 
+                              width = 12, height = 8,
+                              cluster_labels = NULL) {
+    # Handle NA/Inf values
+    matrix_data[is.infinite(matrix_data)] <- NA
+    mean_val <- mean(matrix_data, na.rm = TRUE)
+    sd_val <- sd(matrix_data, na.rm = TRUE)
+    matrix_data[is.na(matrix_data)] <- mean_val
+    
+    # Clip extreme values
+    upper_bound <- mean_val + 3 * sd_val
+    lower_bound <- mean_val - 3 * sd_val
+    matrix_data[matrix_data > upper_bound] <- upper_bound
+    matrix_data[matrix_data < lower_bound] <- lower_bound
+    
+    # Create heatmap
+    png(filename, width = width, height = height, units = "in", res = 300)
+    pheatmap(matrix_data,
+             main = title,
+             color = colorRampPalette(c("white", "red"))(100),
+             display_numbers = TRUE,
+             number_format = "%.2f",
+             fontsize = 14,
+             fontsize_row = 12,
+             fontsize_col = 12,
+             fontsize_number = 10,
+             angle_col = 45,
+             cellwidth = 45,
+             cellheight = 45,
+             main.cex = 1.5,
+             labels_col = paste("Cluster", colnames(matrix_data)))
+    dev.off()
+}
+
+create_bmp_heatmaps <- function(seurat_obj, genes_present, group.by = "SCT_snn_res.0.6", output_dir = "bmp_analysis") {
+    # Create output directory
+    dir.create(file.path(output_dir, "heatmaps"), recursive = TRUE, showWarnings = FALSE)
+    
+    # Get and print metadata to debug
+    print("Available metadata columns:")
+    print(colnames(seurat_obj@meta.data))
+    
+    print("Values in the grouping column:")
+    print(table(seurat_obj[[group.by]]))
+    
+    # Get average expression
+    all_expressed_genes <- unlist(genes_present)
+    avg_expr <- AggregateExpression(seurat_obj, 
+                                   features = all_expressed_genes,
+                                   group.by = group.by)$RNA
+    
+    print("Column names from avg_expr:")
+    print(colnames(avg_expr))
+    
+    # Component scores per cluster
+    component_scores <- data.frame(Cluster = colnames(avg_expr))
+    
+    for(component in names(genes_present)) {
+        genes <- genes_present[[component]]
+        if(length(genes) > 0) {
+            scores <- colMeans(avg_expr[genes,, drop=FALSE])
+            component_scores[[component]] <- scores[match(component_scores$Cluster, names(scores))]
+        }
+    }
+    
+    # Save component scores
+    write.csv(component_scores, 
+              file.path(output_dir, "heatmaps", "cluster_component_scores.csv"))
+    
+    # Create component activity heatmap
+    component_matrix <- as.matrix(component_scores[,-1])
+    rownames(component_matrix) <- component_scores$Cluster
+    
+    create_safe_heatmap(t(component_matrix),
+                       file.path(output_dir, "heatmaps", "component_activity_heatmap.png"),
+                       "Cluster-specific BMP Component Activity",
+                       width = 15,
+                       height = 10)
+    
+    return(component_scores)
+}
+
+# Usage:
+# component_scores <- create_bmp_heatmaps(D0.D4,
+#                                       genes_present = genes_found,
+#                                       group.by = "SCT_snn_res.0.6",
+#                                       output_dir = "bmp_analysis")
+# Usage:
+component_scores <- create_bmp_heatmaps(D0.D4,
+                                      genes_present = genes_found,
+                                      group.by = "SCT_snn_res.0.6",
+                                      output_dir = "bmp_analysis")
+```
+```{r}
+# 4. BMP Pathway Analysis
+# Save as: 4_bmp_pathway.R
+
+library(Seurat)
+library(ggplot2)
+library(pheatmap)
+
+create_pathway_analysis <- function(seurat_obj, genes_present, group.by = "SCT_snn_res.0.6", output_dir = "bmp_analysis") {
+    # Create output directory
+    dir.create(file.path(output_dir, "pathway"), recursive = TRUE, showWarnings = FALSE)
+    
+    # Get average expression
+    all_expressed_genes <- unlist(genes_present)
+    avg_expr <- AggregateExpression(seurat_obj, 
+                                   features = all_expressed_genes,
+                                   group.by = group.by)$RNA
+    
+    clusters <- colnames(avg_expr)
+    
+    # Create pathway schematics for each cluster
+    for(cluster in clusters) {
+        # Get expression data for this cluster
+        cluster_expr <- avg_expr[, cluster]
+        
+        # Create pathway data
+        pathway_data <- data.frame(
+            Component = rep(names(genes_present), sapply(genes_present, length)),
+            Gene = unlist(genes_present),
+            Expression = unlist(lapply(names(genes_present), function(comp) {
+                cluster_expr[genes_present[[comp]]]
+            }))
+        )
+        
+        # Save cluster-specific data
+        write.csv(pathway_data,
+                 file.path(output_dir, "pathway", 
+                          paste0("pathway_data_cluster_", cluster, ".csv")))
+        
+        # Create pathway schematic
+        p <- ggplot(pathway_data, 
+                   aes(x = Component, y = Gene, fill = Expression)) +
+            geom_tile() +
+            scale_fill_gradient2(low = "white", mid = "pink", high = "red",
+                               midpoint = median(pathway_data$Expression, na.rm = TRUE)) +
+            theme_minimal() +
+            theme(
+                axis.text.x = element_text(angle = 45, hjust = 1, size = 20),
+                axis.text.y = element_text(size = 12),
+                axis.title = element_text(size = 20),
+                plot.title = element_text(size = 24)
+            ) +
+            ggtitle(paste("BMP Pathway Components in Cluster", cluster))
+        
+        ggsave(file.path(output_dir, "pathway", 
+                        paste0("pathway_schematic_cluster_", cluster, ".png")),
+               p, width = 12, height = 8, dpi = 300)
+        
+        # Save highly expressed genes
+        high_expr_threshold <- quantile(pathway_data$Expression, 0.75)
+        high_expr_genes <- pathway_data[pathway_data$Expression > high_expr_threshold,]
+        write.csv(high_expr_genes,
+                 file.path(output_dir, "pathway", 
+                          paste0("high_expressed_genes_cluster_", cluster, ".csv")))
+    }
+    
+    # Create interaction analysis
+    interactions <- matrix(0, 
+                         nrow = length(clusters), 
+                         ncol = length(clusters),
+                         dimnames = list(clusters, clusters))
+    
+    ligands <- genes_present$ligands
+    receptors <- c(genes_present$type1_receptors, genes_present$type2_receptors)
+    
+    if(length(ligands) > 0 && length(receptors) > 0) {
+        for(sender in clusters) {
+            for(receiver in clusters) {
+                ligand_scores <- mean(avg_expr[ligands, sender])
+                receptor_scores <- mean(avg_expr[receptors, receiver])
+                interactions[sender, receiver] <- mean(c(ligand_scores, receptor_scores))
+            }
+        }
+        
+        # Save interaction matrix
+        write.csv(interactions, 
+                 file.path(output_dir, "pathway", "interaction_matrix.csv"))
+        
+        # Create interaction heatmap
+        png(file.path(output_dir, "pathway", "interaction_heatmap.png"),
+            width = 12, height = 10, units = "in", res = 300)
+        pheatmap(interactions,
+                main = "BMP Pathway L-R Interactions",
+                color = colorRampPalette(c("white", "red"))(100),
+                display_numbers = TRUE,
+                number_format = "%.2f",
+                fontsize = 10,
+                fontsize_row = 20,
+                fontsize_col = 20,
+                fontsize_number = 10,
+                angle_col = 45,
+                cellwidth = 45,
+                cellheight = 45,
+                main.cex = 1.5)
+        dev.off()
+    }
+    
+    return(list(
+        pathway_data = pathway_data,
+        interactions = interactions
+    ))
+}
+
+# Usage:
+pathway_results <- create_pathway_analysis(D0.D4,
+                                          genes_present = genes_found,  # from first script
+                                          group.by = "SCT_snn_res.0.6",
+                                          output_dir = "bmp_analysis")
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Load the relabeled Seurat object
+cells_subset <- D0.D4
+
+# Define gene sets
+gene_sets <- list(
+  "ICM" = c("Sox2", "Nanog", "Fgf4", "Klf4", "Pou5f1", "Esrrb"),
+  "PE" = c("Gata6", "Sox17", "Gata4", "Sox7"),
+  "TE" = c("Gata3", "Cdx2", "Eomes", "Elf5", "Cdh1", "Tead4")
+)
+
+# Flatten the list of gene sets
+all_genes <- unique(unlist(gene_sets))
+
+# Ensure all genes are present in the dataset
+genes_present <- all_genes[all_genes %in% rownames(cells_subset)]
+
+# Check if any genes are missing
+missing_genes <- setdiff(all_genes, genes_present)
+if (length(missing_genes) > 0) {
+  warning(paste("The following genes are not in the dataset:", paste(missing_genes, collapse = ", ")))
+}
+
+# Define the desired order of clusters (adjust based on your dataset)
+cluster_order <- c("EPI", "PE", "TE")  # Example order for the final labels
+
+# Create the dotplot
+dotplot <- DotPlot(cells_subset, 
+                   features = genes_present, 
+                   group.by = "SCT_snn_res.0.6",
+                   dot.scale = 20) +  # Increase dot size
+  scale_color_gradientn(colors = c("white", "pink", "#8B1A1A")) +  # White to pink to dark burgundy
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 20),
+      axis.text.y = element_text(size = 35, face = "bold"),
+    axis.title.x = element_text(size = 40, face = "bold"),
+    axis.title.y = element_text(size = 35, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 40, face = "bold"),
+    legend.text = element_text(size = 35),
+    legend.title = element_text(size = 35, face = "bold"),
+    legend.key.size = unit(3, "cm"),  # Increase legend key size
+    legend.position = "right"
+  ) + 
+  labs(title = "Pre-Implantation Gene Expression Dotplot",
+       x = "Genes",
+       y = "Cell Types")
+
+# Save the plot
+ggsave("D0-D4_pre-imp_gene_expression_dotplot_custom_order.png", dotplot, width = 30, height = 16, dpi = 300)
+
+# Display the plot
+print(dotplot)
+
+# Print cluster sizes
+print("Cluster sizes:")
+print(table(Idents(cells_subset)))
+```
+
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Load the relabeled Seurat object
+cells_subset <- D0.D4
+
+# Define gene sets
+gene_sets <- list(
+"Nanog", "Pou5f1", "Gsc", "Sox2", "Cdx2", "Elf5", "Gata3", "Tac2", "Muc16", "Ppbp", "Postn", "Pitx2", "Gata6", "Gata4", "Sox17")
+
+
+# Flatten the list of gene sets
+all_genes <- unique(unlist(gene_sets))
+
+# Ensure all genes are present in the dataset
+genes_present <- all_genes[all_genes %in% rownames(cells_subset)]
+
+# Check if any genes are missing
+missing_genes <- setdiff(all_genes, genes_present)
+if (length(missing_genes) > 0) {
+  warning(paste("The following genes are not in the dataset:", paste(missing_genes, collapse = ", ")))
+}
+
+# Create the dotplot
+dotplot <- DotPlot(cells_subset, 
+                   features = genes_present, 
+                   group.by = "SCT_snn_res.0.6",
+                   dot.scale = 20) +  # Increase dot size
+  scale_color_gradientn(colors = c("white","lightblue", "darkblue")) +  # White to pink to dark burgundy
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1, size = 20),
+      axis.text.y = element_text(size = 35, face = "bold"),
+    axis.title.x = element_text(size = 40, face = "bold"),
+    axis.title.y = element_text(size = 35, face = "bold"),
+    plot.title = element_text(hjust = 0.5, size = 40, face = "bold"),
+    legend.text = element_text(size = 35),
+    legend.title = element_text(size = 35, face = "bold"),
+    legend.key.size = unit(3, "cm"),  # Increase legend key size
+    legend.position = "right"
+  ) + 
+  labs(title = "In Vitro Gene Expression Dotplot",
+       x = "Genes",
+       y = "Cell Types")
+
+# Save the plot
+ggsave("D0-D4_in vitro_gene_expression_dotplot_custom_order.png", dotplot, width = 30, height = 16, dpi = 300)
+
+# Display the plot
+print(dotplot)
+
+# Print cluster sizes
+print("Cluster sizes:")
+print(table(Idents(cells_subset)))
+```
+
+
+
+```{r}
+
+Alternate_genes =c("Gata3","Cdx2","Gata4","Elf5","Ascl2", "Gata6","Sox2","Nanog","Pou5f1","Postn","Pixt2","Tac2","Muc16","Ppbp")
+
+# Function to create and save feature plots
+create_feature_plot <- function(seurat_obj, feature, filename) {
+  if (feature %in% rownames(seurat_obj)) {
+    p <- FeaturePlot(seurat_obj, features = feature, 
+                     reduction = "umap", order = TRUE) +
+      scale_color_gradientn(colors = c("lightgrey", "purple")) +
+      ggtitle(feature) +
+      theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))+
+  coord_fixed()
+    
+    ggsave(filename, p, width = 8, height = 6, dpi = 300)
+    return(p)
+  } else {
+    message(paste("Gene", feature, "not found in the dataset."))
+    return(NULL)
+  }
+}
+
+# Create individual feature plots
+Alternate_genes <- unique(unlist(Alternate_genes))
+feature_plots_list <- list()
+for (marker in Alternate_genes) {
+  filename <- paste0("featureplot_", make.names(marker), ".png")
+  p <- create_feature_plot(D0.D4, marker, filename)
+  if (!is.null(p)) {
+    feature_plots_list[[marker]] <- p
+  }
+}
+
+
+```
+```{r}
+# Define the genes of interest
+Alternate_genes <- c("Gata3","Cdx2","Gata4","Elf5","Ascl2", "Gata6","Sox2","Nanog","Pou5f1","Postn","Pitx2","Tac2","Muc16","Ppbp")
+
+# Assuming 'seurat_obj' is your Seurat object
+dotplot <- DotPlot(D0.D4, features = Alternate_genes) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  scale_color_gradient(low = "lightblue", high = "darkblue") +
+  labs(x = "Gene", y = "Cluster", size = "Expression Level", color = "Expression Level")
+
+# Display the plot
+dotplot
+
+# Save the final plot
+ggsave("alternate genes_dotplot.png", plot = dotplot, width = 8, height = 4, units = "in", dpi = 300)
+
+```
+
+
+
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Eomes"
+gene2 <- "Elf5"
+gene3 <- "Cdx2"
+
+# Create a PDF to save the plots
+pdf("D0D4_Eomes_Elf5_Cdx2.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Nanog/Pou5f1/Sox2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Eomes_Elf5_Cdx2", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Eomes_Elf5_Cdx2_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Eomes_Elf5_Cdx2_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Otx2"
+gene2 <- "Nanog"
+gene3 <- "Pou5f1"
+
+# Create a PDF to save the plots
+pdf("D0D4_Otx2_Nanog_Pou5f1.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Nanog/Pou5f1/Sox2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Otx2_Nanog_Pou5f1", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Otx2_Nanog_Pou5f1_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Otx2_Nanog_Pou5f1_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Ascl2"
+gene2 <- "Tpbpa"
+gene3 <- "Gjb3"
+
+# Create a PDF to save the plots
+pdf("D0D4_Ascl2_Tpbpa_Gjb3.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Nanog/Pou5f1/Sox2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Ascl2_Tpbpa_Gjb3", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Ascl2_Tpbpa_Gjb3_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Ascl2_Tpbpa_Gjb3_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Define the two genes of interest
+gene1 <- "Gata4"
+gene2 <- "Gata6"
+
+# Create a PDF to save the plots
+pdf("D0D4_Gata4_Gata6.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing both genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0)
+
+# Identify cells expressing none of the two genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Gata4/Gata6+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "Expression\n",
+                     "Percent expressing Gata4/Gata6:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Gata4_Gata6_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.3 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Elf5_Gata3_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Define the two genes of interest
+gene1 <- "Elf5"
+gene2 <- "Gata3"
+
+# Create a PDF to save the plots
+pdf("D0D4_Elf5_Gata3.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing both genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0)
+
+# Identify cells expressing none of the two genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Elf5/Gata3+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "Expression\n",
+                     "Percent expressing Elf5/Gata3:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Elf5_Gata3_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.3 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Elf5_Gata3_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Nanog"
+gene2 <- "Pou5f1"
+gene3 <- "Sox2"
+
+# Create a PDF to save the plots
+pdf("D0D4_Nanog_Pou5f1_Sox2.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Nanog/Pou5f1/Sox2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Nanog/Pou5f1/Sox2:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Nanog_Pou5f1_Sox2_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Nanog_Pou5f1_Sox2_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+```
+
+
+```{r}
+# Define the two genes of interest
+gene1 <- "Krt18"
+gene2 <- "Krt8"
+
+# Create a PDF to save the plots
+pdf("D0D4_Krt18_Krt8.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing both genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0)
+
+# Identify cells expressing none of the two genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Postn/Pitx2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "Expression\n",
+                     "Percent expressing Krt18/Krt8:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4__Krt18_Krt8_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Krt18_Krt8_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+```
+
+
+```{r}
+# Define the two genes of interest
+gene1 <- "Postn"
+gene2 <- "Pitx2"
+
+# Create a PDF to save the plots
+pdf("D0D4_Postn_Pitx2.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing both genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0)
+
+# Identify cells expressing none of the two genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Postn/Pitx2+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "Expression\n",
+                     "Percent expressing Postn/Pitx2:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Postn_Pitx2_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Postn_Pitx2_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Wnt6"
+gene2 <- "Lrp2"
+gene3 <- "Egfr"
+
+# Create a PDF to save the plots
+pdf("D0D4_Wnt6_Lrp2_Egfr.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", layer = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Wnt6/Lrp2/Egfr+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Wnt6/Lrp2/Egfr:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) + coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Wnt6_Lrp2_Egfr_expression.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.05 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_expression_Wnt6_Lrp2_Egfr.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+```
+
+```{r}
+library(Seurat)
+library(ggplot2)
+
+# Define the three genes of interest
+gene1 <- "Tac2"
+gene2 <- "Muc16"
+gene3 <- "Ppbp"
+
+# Create a PDF to save the plots
+pdf("D0D4_Tac2_Muc16_Pbpb.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", layer = "data")
+
+# Identify cells expressing all three genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                              gene_expression[gene2, ] > 0 & 
+                              gene_expression[gene3, ] > 0)
+
+# Identify cells expressing none of the three genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Wnt6/Lrp2/Egfr+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),    # Larger title
+    legend.text = element_text(size = 14),                  # Larger legend text
+    panel.grid = element_blank(), 
+    legend.key.size = unit(1.5, "lines"),                   # Larger legend symbols
+    legend.title = element_blank(),                         # Remove the legend title
+    axis.line = element_line(color = "black")               # Add axis lines
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) + 
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Tac2_Muc16_Pbpb:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) + coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Tac2_Muc16_Pbpb_expression.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.05 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_expression_Tac2_Muc16_Pbpb.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+```
+
+```{r}
+
+#keep in case i want to check later 
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Define the four genes of interest
+gene1 <- "Tfrc"
+gene2 <- "Dio3"
+gene3 <- "Hbegf"
+gene4 <- "Glis1"
+
+# Create a PDF to save the plots
+pdf("D0D4_Tfrc_Dio_Hbegf_Glis.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all four genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                               gene_expression[gene2, ] > 0 & 
+                               gene_expression[gene3, ] > 0 &
+                               gene_expression[gene4, ] > 0)
+
+# Identify cells expressing none of the four genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0 & 
+                               gene_expression[gene4, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "/", gene4, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, 
+                                                     levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "/", gene4, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data so that the "No Expression" cells are plotted first and "Wnt6/Lrp2/Egfr+" cells are plotted last
+umap_data <- umap_data[order(umap_data$expression_status),]
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    legend.text = element_text(size = 14),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.5, "lines"),
+    legend.title = element_blank(),
+    axis.line = element_line(color = "black")
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 3))) +
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "Expression\n",
+                     "Percent expressing Tfrc_Dio_Hbegf_Glis:", 
+                     round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot as PNG
+png_filename <- paste0("UMAP_", gene1, "_", gene2, "_", gene3, "_", gene4, "_Expression.png")
+ggsave(filename = png_filename,
+       plot = p, 
+       width = 8, 
+       height = 6, 
+       units = "in", 
+       dpi = 300,
+       device = "png")
+
+# Print the plot
+print(p)
+
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Tfrc_Dio_Hbegf_Glis_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.1 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Tfrc_Dio_Hbegf_Glis_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+```
+```{r}
+#keep in case i want to check later - EPC markers?
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+# Define the four genes of interest
+gene1 <- "Tpbpa"
+gene2 <- "Hand1"
+gene3 <- "Tfap2c"
+gene4 <- "Gjb3"
+
+# Create a PDF to save the plots
+pdf("D0D4_Tpbpa_Hand1_Tfap2c_Gjb3.pdf")
+
+# Get gene expression data for the genes of interest
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Identify cells expressing all four genes
+cells_expressing_all <- which(gene_expression[gene1, ] > 0 & 
+                               gene_expression[gene2, ] > 0 & 
+                               gene_expression[gene3, ] > 0 &
+                               gene_expression[gene4, ] > 0)
+
+# Identify cells expressing none of the four genes
+cells_expressing_none <- which(gene_expression[gene1, ] == 0 & 
+                               gene_expression[gene2, ] == 0 & 
+                               gene_expression[gene3, ] == 0 & 
+                               gene_expression[gene4, ] == 0)
+
+# Create a factor variable for labeling
+D0.D4$expression_status <- "No Expression"
+D0.D4$expression_status[cells_expressing_all] <- paste(gene1, "/", gene2, "/", gene3, "/", gene4, "+", sep = "")
+
+# Convert the expression_status to a factor and reorder the cells in the data frame
+D0.D4$expression_status <- factor(D0.D4$expression_status, 
+                                                     levels = c("No Expression", paste(gene1, "/", gene2, "/", gene3, "/", gene4, "+", sep = "")))
+
+# Extract the UMAP coordinates
+umap_data <- as.data.frame(Embeddings(D0.D4, reduction = "umap"))
+umap_data$expression_status <- D0.D4$expression_status
+
+# Reorder the umap_data
+umap_data <- umap_data[order(umap_data$expression_status),]
+
+# Create the plot using ggplot2
+p <- ggplot(umap_data, aes(x = umap_1, y = umap_2, color = expression_status)) +
+  geom_point(size = 0.2) +
+  scale_color_manual(values = c("grey70", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    legend.text = element_text(size = 14),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.5, "lines"),
+    legend.title = element_blank(),
+    axis.line = element_line(color = "black")
+  ) + guides(color = guide_legend(override.aes = list(size = 3))) +
+  labs(title = paste(gene1, "/", gene2, "/", gene3, "/", gene4, "Expression\n",
+                     "Percent expressing:", round(length(cells_expressing_all) / ncol(D0.D4) * 100, 2), "%")) +
+  coord_fixed()
+
+# Save the plot
+ggsave(paste("UMAP_", gene1, "_", gene2, "_", gene3, "_", gene4, "_Expression.png", sep = ""), 
+       plot = p, width = 8, height = 6, units = "in", dpi = 300)
+
+# Print the plot
+print(p)
+
+# Extract metadata and expression data for the identified cells
+metadata <- D0.D4@meta.data
+expressing_cells_metadata <- metadata[cells_expressing_all, ]
+
+# Get the list of unique conditions where these cells are found
+conditions_with_expression <- expressing_cells_metadata %>%
+  group_by(condition) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(conditions_with_expression, "D0D4_Tpbpa_Hand1_Tfap2c_Gjb3_expression_conditions.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(conditions_with_expression)
+
+# Group by SCT_snn_res.0.6 and count the cells
+clusters_with_expression <- expressing_cells_metadata %>%
+  group_by(SCT_snn_res.0.6) %>%
+  summarise(num_cells_expressing_all = n()) %>%
+  arrange(desc(num_cells_expressing_all))
+
+# Save the result to a CSV file
+write.csv(clusters_with_expression, "D0D4_Tpbpa_Hand1_Tfap2c_Gjb3_expression_clusters.csv", row.names = FALSE)
+
+# Print the result to the console for review
+print(clusters_with_expression)
+
+# Close the PDF
+dev.off()
+
+```
+
+```{r}
+
+# Define the genes of interest in the desired order
+genes <- c("Hand1", "Ascl2", "Phlda2", "Cdh1", "Eomes", "Elf5", "Esrrb", "Tfap2c","Junb", "Xrcc4", "Smarcb1", "Tagln2","Cited1","Tpbpa", "Gjb3", "Rhox6", "Rhox9","Gbj5","Adamts1", "Fmnl1", "Cdx2", "Bmp2","Tfrc", "Dio3", "Hbegf", "Tead3", "Dlx3", "Glis1","Inhbb", "Pcdh12", "Rora", "Mmp9", "Plac8","Kdr", "Pecam1", "Mest", "Dlk1","Igfbp2", "Bex4", "Bex2", "Nanog", "Pou3f1", "Pou5f1","Klf4", "Otx2", "Sox2")
+
+# Function to create and save feature plots
+create_feature_plot <- function(seurat_obj, feature, filename) {
+  if (feature %in% rownames(seurat_obj)) {
+    p <- FeaturePlot(seurat_obj, features = feature, 
+                     reduction = "umap", order = TRUE) +
+      scale_color_gradientn(colors = c("lightgrey", "purple")) +
+      ggtitle(feature) +
+      theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5))+
+  coord_fixed()
+    
+    ggsave(filename, p, width = 8, height = 6, dpi = 300)
+    return(p)
+  } else {
+    message(paste("Gene", feature, "not found in the dataset."))
+    return(NULL)
+  }
+}
+
+# Create individual feature plots
+all_markers <- unique(unlist(genes))
+feature_plots_list <- list()
+for (marker in all_markers) {
+  filename <- paste0("featureplot_", make.names(marker), ".png")
+  p <- create_feature_plot(D0.D4, marker, filename)
+  if (!is.null(p)) {
+    feature_plots_list[[marker]] <- p
+  }
+}
+
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+
+# Define the three genes of interest
+gene1 <- "Gata3"
+gene2 <- "Cdx2"
+gene3 <- "Elf5"
+
+# Create individual UMAP feature plots for each gene
+p1 <- FeaturePlot(D0.D4, 
+                  features = gene1,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene1) +
+  coord_fixed()
+
+p2 <- FeaturePlot(D0.D4, 
+                  features = gene2,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene2) +
+  coord_fixed()
+
+p3 <- FeaturePlot(D0.D4, 
+                  features = gene3,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene3) +
+  coord_fixed()
+
+# Combine plots using patchwork
+combined_plot <- p1 + p2 + p3 +
+  plot_layout(ncol = 3) +
+  plot_annotation(
+    title = paste(gene1, "/", gene2, "/", gene3, "Expression Levels in UMAP"),
+    theme = theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5))
+  )
+
+# Save the combined plot
+ggsave(
+  paste("UMAP_", gene1, "_", gene2, "_", gene3, "_Expression_Levels.png", sep = ""),
+  plot = combined_plot,
+  width = 15,
+  height = 5,
+  units = "in",
+  dpi = 300
+)
+
+# Calculate expression statistics
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Calculate mean expression per condition
+condition_stats <- D0.D4@meta.data %>%
+  mutate(
+    Gata3_exp = gene_expression[gene1, rownames(.)],
+    Cdx2_exp = gene_expression[gene2, rownames(.)],
+    Elf5_exp = gene_expression[gene3, rownames(.)]
+  ) %>%
+  group_by(condition) %>%
+  summarise(
+    mean_Gata3 = mean(Gata3_exp),
+    mean_Cdx2 = mean(Cdx2_exp),
+    mean_Elf5 = mean(Elf5_exp),
+    n_cells = n()
+  ) %>%
+  arrange(desc(mean_Gata3 + mean_Cdx2 + mean_Elf5))
+
+# Save statistics to CSV file
+write.csv(condition_stats, 
+          "D0D4_Gata3_Cdx2_Elf5_expression_conditions_continuous.csv", 
+          row.names = FALSE)
+
+# Print statistics to console
+print("Expression statistics by condition:")
+print(condition_stats)
+```
+
+```{r}
+# Marker gene list 1, UMAPS, violin plot, dotplot, generates number and percent of cells expressing the gene condition and by cluster 
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+Idents(D0.D4) <- "SCT_snn_res.0.6"
+
+# List of marker genes
+marker_genes <- c("Gata3", "Pou5f1", "Nanog", "Cdx2", "Elf5", "Ascl2", "Postn", "Gata6", "Jup", "Gata2", 
+                  "Gata4", "Klf4", "Krt18", "Sox2", "Btg2", "Tfap2c", "Gcm1", "Tpbpa", "Tfap2a", "Eomes", 
+                  "Bmp2", "Wnt6", "Lrp2", "Pitx1", "Pitx2", "Krt7", "Epcam", "Cldn7", "T", "Afp", "Amn", 
+                  "Ifitm3", "Ptn", "Twist2", "Isl1", "Tagln", "Acta2", "Fn1", "Foxf1", "Hand1", "Gtf2b", 
+                  "Sox4", "Spib", "Nr2f6", "Fos", "Tcf4", "Cebpa", "Taf1", "Elf4", "Tead4", "Bmp4", 
+                  "Bmp7", "Fgf4", "Sox17", "Dab2", "Acvrl1", "Acvr1", "Bmpr1b", "Bmpr2", "Psma5", "Psma1", 
+                  "Lin28a", "Bcam", "Met", "Egfr", "Cyba", "Phlda2", "Elf3", "Tfrc", "Dio3", "Hbegf", 
+                  "Tead3", "Dlx3", "Glis1", "Krt19", "Timp1", "Phactr1", "Tnfaip2", "Ghrh", "Bhlhe40", 
+                  "Mmp9", "Fosl1", "Slc16a3", "Gjb5", "Mt2", "Derl3", "Fgfbp1", "Pcdh12", "Adamts1", 
+                  "Fmnl1", "Lgr5", "Msx2","Zscan4d")
+
+# Set up PDF device for saving plots
+pdf("D0-D4_markers.pdf")
+
+for (i in marker_genes) {
+
+
+  # Violin Plot by Cluster
+  vp_cluster <- VlnPlot(D0.D4, 
+                        features = i, 
+                        pt.size = 0.2,
+                        group.by = "SCT_snn_res.0.6",  # Assuming this is your clustering resolution
+                        raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Violin Plot for", i, "by Cluster"))  # Title for the plot
+  
+  print(vp_cluster)
+
+  # Feature Plot colored by clusters
+  Idents(D0.D4) <- "SCT_snn_res.0.6"
+  fp <- FeaturePlot(D0.D4, reduction = "umap",
+                    features = i, 
+                    pt.size = 0.2, 
+                    raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Feature Plot for", i))  # Title for the plot
+
+  # Add cluster labels to the UMAP
+  fp_with_labels <- LabelClusters(fp, id = "ident", size = 5)
+  print(fp)
+  print(fp_with_labels)
+  
+}
+
+
+pdf("D0D4_xintegrate_dotplot.pdf", width = 20, height = 8)
+
+# Generate dot plot for all marker genes by cluster
+dp <- DotPlot(D0.D4, 
+              features = marker_genes, 
+              cols = c("blue", "red"), 
+              dot.scale = 6) + 
+  RotatedAxis() + 
+  labs(title = "Dot Plot of Marker Genes by Cluster") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right",
+        legend.key.size = unit(1.5, "lines"))
+
+print(dp)
+
+# Close PDF device
+dev.off()
+
+# Initialize data frames to store results for condition and cluster
+results_condition <- data.frame(condition = character(), 
+                                gene = character(),
+                                num_cells_expressing_gene = integer(),
+                                percent_cells_expressing_gene = numeric(),
+                                stringsAsFactors = FALSE)
+
+results_cluster <- data.frame(cluster = character(), 
+                              gene = character(),
+                              num_cells_expressing_gene = integer(),
+                              percent_cells_expressing_gene = numeric(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each gene
+for (gene in marker_genes) {
+  
+  # Get gene expression data
+  gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+  
+  # Get conditions and clusters present in the dataset
+  conditions <- unique(D0.D4@meta.data$condition)
+  clusters <- unique(D0.D4@meta.data$SCT_snn_res.0.6)
+  
+  # Loop through each condition
+  for (condition in conditions) {
+    # Identify cells from the current condition
+    cells_in_condition <- which(D0.D4@meta.data$condition == condition)
+    
+    # Identify cells expressing the current gene within the current condition
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_condition] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_condition) * 100
+    
+    # Append results to the condition data frame
+    results_condition <- rbind(results_condition, list(condition = condition,
+                                                       gene = gene,
+                                                       num_cells_expressing_gene = num_cells_expressing_gene,
+                                                       percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+  
+  # Loop through each cluster
+  for (cluster in clusters) {
+    # Identify cells from the current cluster
+    cells_in_cluster <- which(D0.D4@meta.data$SCT_snn_res.0.6 == cluster)
+    
+    # Identify cells expressing the current gene within the current cluster
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_cluster] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_cluster) * 100
+    
+    # Append results to the cluster data frame
+    results_cluster <- rbind(results_cluster, list(cluster = cluster,
+                                                   gene = gene,
+                                                   num_cells_expressing_gene = num_cells_expressing_gene,
+                                                   percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+}
+
+# Print the results
+print(results_condition)
+print(results_cluster)
+
+# Save results to CSV files
+write.csv(results_condition, file = "D0D4_xintegrate_markers_gene_expression_results_by_condition_markers.csv", row.names = FALSE)
+write.csv(results_cluster, file = "D0D4_xintegrate_markers_gene_expression_results_by_cluster_markers.csv", row.names = FALSE)
+```
+
+```{r}
+# Marker gene list for 2C
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+Idents(D0.D4) <- "SCT_snn_res.0.6"
+
+# List of marker genes
+marker_genes2c <- c("Zscan4b", "Zscan4c","Zscan4d","Zscan4e","Zscan4f","Tcstv1","Tcstv3", "Gm4340","Tdpoz1","Tdpoz3","Usp17lc","Usp17ld")
+
+# Set up PDF device for saving plots
+pdf("D0-D4_markers2c.pdf")
+
+for (i in marker_genes2c) {
+
+
+  # Violin Plot by Cluster
+  vp_cluster <- VlnPlot(D0.D4, 
+                        features = i, 
+                        pt.size = 0.2,
+                        group.by = "SCT_snn_res.0.6",  # Assuming this is your clustering resolution
+                        raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Violin Plot for", i, "by Cluster"))  # Title for the plot
+  
+  print(vp_cluster)
+
+  # Feature Plot colored by clusters
+  Idents(D0.D4) <- "SCT_snn_res.0.6"
+  fp <- FeaturePlot(D0.D4, reduction = "umap",
+                    features = i, 
+                    pt.size = 0.2, 
+                    raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Feature Plot for", i))  # Title for the plot
+
+  # Add cluster labels to the UMAP
+  fp_with_labels <- LabelClusters(fp, id = "ident", size = 5)
+  print(fp)
+  print(fp_with_labels)
+  
+}
+
+
+pdf("D0-D4-EpiLC_2C_dotplot.pdf", width = 20, height = 8)
+
+# Generate dot plot for all marker genes by cluster
+dp <- DotPlot(D0.D4, 
+              features = marker_genes2c, 
+              cols = c("blue", "red"), 
+              dot.scale = 6) + 
+  RotatedAxis() + 
+  labs(title = "Dot Plot of Marker Genes by Cluster") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right",
+        legend.key.size = unit(1.5, "lines"))
+
+print(dp)
+
+# Close PDF device
+dev.off()
+
+# Initialize data frames to store results for condition and cluster
+results_condition <- data.frame(condition = character(), 
+                                gene = character(),
+                                num_cells_expressing_gene = integer(),
+                                percent_cells_expressing_gene = numeric(),
+                                stringsAsFactors = FALSE)
+
+results_cluster <- data.frame(cluster = character(), 
+                              gene = character(),
+                              num_cells_expressing_gene = integer(),
+                              percent_cells_expressing_gene = numeric(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each gene
+for (gene in marker_genes2c) {
+  
+  # Get gene expression data
+  gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+  
+  # Get conditions and clusters present in the dataset
+  conditions <- unique(D0.D4@meta.data$condition)
+  clusters <- unique(D0.D4@meta.data$SCT_snn_res.0.6)
+  
+  # Loop through each condition
+  for (condition in conditions) {
+    # Identify cells from the current condition
+    cells_in_condition <- which(D0.D4@meta.data$condition == condition)
+    
+    # Identify cells expressing the current gene within the current condition
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_condition] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_condition) * 100
+    
+    # Append results to the condition data frame
+    results_condition <- rbind(results_condition, list(condition = condition,
+                                                       gene = gene,
+                                                       num_cells_expressing_gene = num_cells_expressing_gene,
+                                                       percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+  
+  # Loop through each cluster
+  for (cluster in clusters) {
+    # Identify cells from the current cluster
+    cells_in_cluster <- which(D0.D4@meta.data$SCT_snn_res.0.6 == cluster)
+    
+    # Identify cells expressing the current gene within the current cluster
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_cluster] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_cluster) * 100
+    
+    # Append results to the cluster data frame
+    results_cluster <- rbind(results_cluster, list(cluster = cluster,
+                                                   gene = gene,
+                                                   num_cells_expressing_gene = num_cells_expressing_gene,
+                                                   percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+}
+
+# Print the results
+print(results_condition)
+print(results_cluster)
+
+# Save results to CSV files
+write.csv(results_condition, file = "D0-D4_2c_markers_gene_expression_results_by_condition_markers.csv", row.names = FALSE)
+write.csv(results_cluster, file = "D0-D4_2c_markers_gene_expression_results_by_cluster_markers.csv", row.names = FALSE)
+```
+
+```{r}
+# Marker gene list for totipotency
+
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+
+Idents(D0.D4) <- "SCT_snn_res.0.6"
+
+# List of marker genes
+marker_genes_toti <- c("Dppa3","Dppa2","Dppa4","Pou5f1","Nanog", "Sox2","Klf4","Esrrb","Tbx3","Prdm14")
+
+pdf("D0-D4_markers_marker_genes_toti.pdf")
+
+for (i in marker_genes_toti) {
+
+
+  # Violin Plot by Cluster
+  vp_cluster <- VlnPlot(D0.D4, 
+                        features = i, 
+                        pt.size = 0.2,
+                        group.by = "SCT_snn_res.0.6",  # Assuming this is your clustering resolution
+                        raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Violin Plot for", i, "by Cluster"))  # Title for the plot
+  
+  print(vp_cluster)
+
+  # Feature Plot colored by clusters
+  Idents(D0.D4) <- "SCT_snn_res.0.6"
+  fp <- FeaturePlot(D0.D4, reduction = "umap",
+                    features = i, 
+                    pt.size = 0.2, 
+                    raster = FALSE) +
+    theme(legend.position = "right") +  # Place legend on the right
+    labs(title = paste("Feature Plot for", i))  # Title for the plot
+
+  # Add cluster labels to the UMAP
+  fp_with_labels <- LabelClusters(fp, id = "ident", size = 5)
+  print(fp)
+  print(fp_with_labels)
+  
+}
+
+
+pdf("D0-D4-EpiLC_marker_genes_toti_dotplot.pdf", width = 20, height = 8)
+
+# Generate dot plot for all marker genes by cluster
+dp <- DotPlot(D0.D4, 
+              features = marker_genes_toti, 
+              cols = c("blue", "red"), 
+              dot.scale = 6) + 
+  RotatedAxis() + 
+  labs(title = "Dot Plot of Marker Genes by Cluster") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        legend.position = "right",
+        legend.key.size = unit(1.5, "lines"))
+
+print(dp)
+
+# Close PDF device
+dev.off()
+
+# Initialize data frames to store results for condition and cluster
+results_condition <- data.frame(condition = character(), 
+                                gene = character(),
+                                num_cells_expressing_gene = integer(),
+                                percent_cells_expressing_gene = numeric(),
+                                stringsAsFactors = FALSE)
+
+results_cluster <- data.frame(cluster = character(), 
+                              gene = character(),
+                              num_cells_expressing_gene = integer(),
+                              percent_cells_expressing_gene = numeric(),
+                              stringsAsFactors = FALSE)
+
+# Loop through each gene
+for (gene in marker_genes_toti) {
+  
+  # Get gene expression data
+  gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+  
+  # Get conditions and clusters present in the dataset
+  conditions <- unique(D0.D4@meta.data$condition)
+  clusters <- unique(D0.D4@meta.data$SCT_snn_res.0.6)
+  
+  # Loop through each condition
+  for (condition in conditions) {
+    # Identify cells from the current condition
+    cells_in_condition <- which(D0.D4@meta.data$condition == condition)
+    
+    # Identify cells expressing the current gene within the current condition
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_condition] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_condition) * 100
+    
+    # Append results to the condition data frame
+    results_condition <- rbind(results_condition, list(condition = condition,
+                                                       gene = gene,
+                                                       num_cells_expressing_gene = num_cells_expressing_gene,
+                                                       percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+  
+  # Loop through each cluster
+  for (cluster in clusters) {
+    # Identify cells from the current cluster
+    cells_in_cluster <- which(D0.D4@meta.data$SCT_snn_res.0.6 == cluster)
+    
+    # Identify cells expressing the current gene within the current cluster
+    cells_expressing_gene <- which(gene_expression[gene, cells_in_cluster] > 0)
+    
+    # Count cells expressing the current gene
+    num_cells_expressing_gene <- length(cells_expressing_gene)
+    
+    # Calculate the percentage of cells expressing the current gene
+    percent_cells_expressing_gene <- num_cells_expressing_gene / length(cells_in_cluster) * 100
+    
+    # Append results to the cluster data frame
+    results_cluster <- rbind(results_cluster, list(cluster = cluster,
+                                                   gene = gene,
+                                                   num_cells_expressing_gene = num_cells_expressing_gene,
+                                                   percent_cells_expressing_gene = percent_cells_expressing_gene))
+  }
+}
+
+# Print the results
+print(results_condition)
+print(results_cluster)
+
+# Save results to CSV files
+write.csv(results_condition, file = "D0-D4_marker_genes_toti_markers_gene_expression_results_by_condition_markers.csv", row.names = FALSE)
+write.csv(results_cluster, file = "D0-D4_marker_genes_toti_markers_gene_expression_results_by_cluster_markers.csv", row.names = FALSE)
+```
+```{r}
+library(Seurat)
+library(ggplot2)
+library(patchwork)
+
+# Define the four genes of interest
+gene1 <- "Zscan4d"
+gene2 <- "Zscan4c"
+gene3 <- "Gm4340"
+gene4 <- "Usp17lc"
+
+# Create individual UMAP feature plots for each gene
+p1 <- FeaturePlot(D0.D4, 
+                  features = gene1,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene1) +
+  coord_fixed()
+
+p2 <- FeaturePlot(D0.D4, 
+                  features = gene2,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene2) +
+  coord_fixed()
+
+p3 <- FeaturePlot(D0.D4, 
+                  features = gene3,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene3) +
+  coord_fixed()
+
+p4 <- FeaturePlot(D0.D4, 
+                  features = gene4,
+                  reduction = "umap",
+                  pt.size = 0.2,
+                  order = TRUE) +
+  scale_color_gradientn(colors = c("grey90", "purple")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 12),
+    panel.grid = element_blank(),
+    legend.key.size = unit(1.2, "lines"),
+    axis.line = element_line(color = "black")
+  ) +
+  labs(title = gene4) +
+  coord_fixed()
+
+# Combine plots horizontally using patchwork
+combined_plot <- p1 + p2 + p3 + p4 +
+  plot_layout(ncol = 4) +
+  plot_annotation(
+    title = "Zscan4 Family and Related Genes Expression Levels in UMAP",
+    theme = theme(plot.title = element_text(size = 20, face = "bold", hjust = 0.5))
+  )
+
+# Save the combined plot
+ggsave(
+  paste("UMAP_Zscan4_family_Expression_Levels.png"),
+  plot = combined_plot,
+  width = 20,    # Increased width to accommodate 4 plots side by side
+  height = 5,    # Reduced height since we're using a single row
+  units = "in",
+  dpi = 300
+)
+
+# Calculate expression statistics
+gene_expression <- GetAssayData(object = D0.D4, assay = "RNA", slot = "data")
+
+# Calculate mean expression per condition
+condition_stats <- D0.D4@meta.data %>%
+  mutate(
+    Zscan4d_exp = gene_expression[gene1, rownames(.)],
+    Zscan4c_exp = gene_expression[gene2, rownames(.)],
+    Gm5662_exp = gene_expression[gene3, rownames(.)],
+    Usp17lc_exp = gene_expression[gene4, rownames(.)]
+  ) %>%
+  group_by(condition) %>%
+  summarise(
+    mean_Zscan4d = mean(Zscan4d_exp),
+    mean_Zscan4c = mean(Zscan4c_exp),
+    mean_Gm5662 = mean(Gm5662_exp),
+    mean_Usp17lc = mean(Usp17lc_exp),
+    n_cells = n()
+  ) %>%
+  arrange(desc(mean_Zscan4d + mean_Zscan4c + mean_Gm5662 + mean_Usp17lc))
+
+# Save statistics to CSV file
+write.csv(condition_stats, 
+          "D0D4_Zscan4_family_expression_conditions_continuous.csv", 
+          row.names = FALSE)
+
+# Print statistics to console
+print("Expression statistics by condition:")
+print(condition_stats)
+```
+
+```{r}
+save(D0.D4, file="cells.combined_D0D4.rdata")
+```
+
+
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+
+```
+
+
+
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install(version = "3.18")
+BiocManager::install(c("GenomicFeatures", "AnnotationDbi"))
+
+BiocManager::install("slingshot")
+BiocManager::install("tidymodels")
+BiocManager::install("BUSpaRse")
+BiocManager::install("SingleCellExperiment")
+BiocManager::install("scry")
+BiocManager::install("RColorBrewer")
+
+
+  
+library(slingshot)
+library(BUSpaRse)
+library(tidyverse)
+library(tidymodels)
+library(Seurat)
+library(scales)
+library(viridis)
+library(Matrix)
+library(SingleCellExperiment)
+library(RColorBrewer)
+library(scry)
+```
+
+```{r}
+
+BiocManager::install(c("GenomicFeatures", "AnnotationDbi"))
+BiocManager::install("scuttle")
+BiocManager::install("scater")
+
+library(scuttle)
+library(scater)
+
+```
+
+
+
+
+
+```{r}
+
+#load treatment rdata - "cells.combined_mCell_Treatmentonlyintegrate.rdata"
+library(SingleCellExperiment)
+library(Seurat) 
+library(SeuratObject) 
+library(SummarizedExperiment)
+
+D0.D4 <- NormalizeData(D0.D4, assay = "RNA")  # Normalize RNA data
+D0.D4 <- ScaleData(D0.D4, assay = "RNA")       # Scale RNA data
+
+table(Idents(D0.D4))
+
+
+DefaultAssay(D0.D4) <- "RNA"
+
+# Optionally join RNA layers if not already done
+D0.D4[["RNA"]] <- JoinLayers(D0.D4[["RNA"]])
+
+D0.D4.sce <- SingleCellExperiment(D0.D4)
+
+```
+
+```{r}
+## explore the SCE object ----
+
+pca <- Embeddings(D0.D4, reduction = "pca")
+umap <- Embeddings(D0.D4, reduction = "umap")
+reducedDims(D0.D4.sce) <- SimpleList(PCA = pca, UMAP = umap)
+print(names(reducedDims(D0.D4.sce)))
+D0.D4.sce$SCT_snn_res.0.6 <- D0.D4$SCT_snn_res.0.6
+dim(reducedDim(D0.D4.sce, "PCA"))
+dim(reducedDim(D0.D4.sce, "UMAP"))
+
+plotReducedDim(D0.D4.sce, dimred="PCA", colour_by="SCT_snn_res.0.6")
+plotReducedDim(D0.D4.sce, dimred="UMAP", colour_by="SCT_snn_res.0.6")
+
+```
+```{r}
+# Load necessary libraries
+library(slingshot)
+library(Seurat)
+library(SingleCellExperiment)
+library(scater)
+library(RColorBrewer)
+library(ggplot2)
+library(dplyr)
+```
+
+```{r}
+# Convert Seurat object to SingleCellExperiment
+D0.D4.sce <- as.SingleCellExperiment(D0.D4)
+
+# Add UMAP coordinates to SingleCellExperiment object
+reducedDim(D0.D4.sce, "UMAP") <- Embeddings(D0.D4, "umap")
+
+# Run slingshot with defined starting point
+D0.D4.sce <- slingshot(D0.D4.sce, reducedDim = "UMAP",
+                       clusterLabels = D0.D4.sce$SCT_snn_res.0.6,
+                       start.clus = "1",  # Force start from cluster 0
+                       stretch = 0, 
+                       extend = "n")
+
+# Create a base filename
+file_name_base <- "slingshot_trajectory_"
+
+# Get pseudotime columns
+pseudotime_cols <- grep("slingPseudotime_", colnames(colData(D0.D4.sce)), value = TRUE)
+
+# Loop through each pseudotime
+for (pseudotime_col in pseudotime_cols) {
+  # Extract lineage number
+  lineage_num <- gsub("slingPseudotime_", "", pseudotime_col)
+  
+  # Extract pseudotime values
+  pseudotime_values <- colData(D0.D4.sce)[[pseudotime_col]]
+  
+  # Create a data frame for plotting
+  plot_data <- data.frame(
+    UMAP_1 = reducedDim(D0.D4.sce, "UMAP")[,1],
+    UMAP_2 = reducedDim(D0.D4.sce, "UMAP")[,2],
+    Pseudotime = pseudotime_values,
+    Cluster = D0.D4.sce$SCT_snn_res.0.6
+  )
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = UMAP_1, y = UMAP_2)) +
+    geom_point(aes(color = Pseudotime), size = 1, alpha = 0.7) +
+    scale_color_viridis_c(option = "C", na.value = "grey50") +
+    theme_minimal() +
+    labs(title = paste("Slingshot Trajectory - Lineage", lineage_num),
+         x = "UMAP 1", y = "UMAP 2", color = "Pseudotime") +
+    theme(legend.position = "right")
+  
+  # Add cluster labels
+  cluster_centers <- plot_data %>%
+    group_by(Cluster) %>%
+    summarise(UMAP_1 = mean(UMAP_1),
+              UMAP_2 = mean(UMAP_2))
+  
+  p <- p + geom_text(data = cluster_centers, 
+                     aes(x = UMAP_1, y = UMAP_2, label = Cluster),
+                     color = "black", fontface = "bold", size = 4)
+  
+  # Add trajectory lines
+  sds <- SlingshotDataSet(D0.D4.sce)
+  lineages <- slingLineages(sds)
+  curves <- slingCurves(sds)
+  
+  for (i in seq_along(curves)) {
+    curve_data <- data.frame(UMAP_1 = curves[[i]]$s[,1], UMAP_2 = curves[[i]]$s[,2])
+    p <- p + geom_path(data = curve_data, aes(x = UMAP_1, y = UMAP_2), 
+                       color = "black", size = 1, lineend = "round")
+  }
+  
+  # Save plot
+  ggsave(paste0(file_name_base, "lineage_", lineage_num, ".png"), 
+         plot = p, width = 10, height = 8, dpi = 300)
+}
+
+# Save Slingshot results
+saveRDS(D0.D4.sce, "slingshot_results.rds")
+
+# Print summary of results
+cat("Slingshot analysis complete. Results saved in 'slingshot_results.rds'.\n")
+cat("Number of lineages identified:", length(pseudotime_cols), "\n")
+cat("Trajectory plots saved with prefix:", file_name_base, "\n")
+```
+
+
+```{r}
+#if you want to not force the starting point
+# Convert Seurat object to SingleCellExperiment
+D0.D4.sce <- as.SingleCellExperiment(D0.D4)
+
+# Add UMAP coordinates to SingleCellExperiment object
+reducedDim(D0.D4.sce, "UMAP") <- Embeddings(D0.D4, "umap")
+
+# Run slingshot
+D0.D4.sce <- slingshot(D0.D4.sce, reducedDim = "UMAP",
+                       clusterLabels = D0.D4.sce$SCT_snn_res.0.6,
+                       stretch = 0, 
+                       extend = "n")
+
+# Create a base filename
+file_name_base <- "slingshot_trajectory_"
+
+# Get pseudotime columns
+pseudotime_cols <- grep("slingPseudotime_", colnames(colData(D0.D4.sce)), value = TRUE)
+
+# Loop through each pseudotime
+for (pseudotime_col in pseudotime_cols) {
+  # Extract lineage number
+  lineage_num <- gsub("slingPseudotime_", "", pseudotime_col)
+  
+  # Extract pseudotime values
+  pseudotime_values <- colData(D0.D4.sce)[[pseudotime_col]]
+  
+  # Create a data frame for plotting
+  plot_data <- data.frame(
+    UMAP_1 = reducedDim(D0.D4.sce, "UMAP")[,1],
+    UMAP_2 = reducedDim(D0.D4.sce, "UMAP")[,2],
+    Pseudotime = pseudotime_values,
+    Cluster = D0.D4.sce$SCT_snn_res.0.6
+  )
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = UMAP_1, y = UMAP_2)) +
+    geom_point(aes(color = Pseudotime), size = 1, alpha = 0.7) +
+    scale_color_viridis_c(option = "C", na.value = "grey50") +
+    theme_minimal() +
+    labs(title = paste("Slingshot Trajectory - Lineage", lineage_num),
+         x = "UMAP 1", y = "UMAP 2", color = "Pseudotime") +
+    theme(legend.position = "right")
+  
+  # Add cluster labels
+  cluster_centers <- plot_data %>%
+    group_by(Cluster) %>%
+    summarise(UMAP_1 = mean(UMAP_1),
+              UMAP_2 = mean(UMAP_2))
+  
+  p <- p + geom_text(data = cluster_centers, 
+                     aes(x = UMAP_1, y = UMAP_2, label = Cluster),
+                     color = "black", fontface = "bold", size = 4)
+  
+  # Add trajectory lines
+  sds <- SlingshotDataSet(D0.D4.sce)
+  lineages <- slingLineages(sds)
+  curves <- slingCurves(sds)
+  
+  for (i in seq_along(curves)) {
+    curve_data <- data.frame(UMAP_1 = curves[[i]]$s[,1], UMAP_2 = curves[[i]]$s[,2])
+    p <- p + geom_path(data = curve_data, aes(x = UMAP_1, y = UMAP_2), 
+                       color = "black", size = 1, lineend = "round")
+  }
+  
+  # Save plot
+  ggsave(paste0(file_name_base, "lineage_", lineage_num, ".png"), 
+         plot = p, width = 10, height = 8, dpi = 300)
+}
+
+# Save Slingshot results
+saveRDS(D0.D4.sce, "slingshot_results.rds")
+
+# Print summary of results
+cat("Slingshot analysis complete. Results saved in 'slingshot_results.rds'.\n")
+cat("Number of lineages identified:", length(pseudotime_cols), "\n")
+cat("Trajectory plots saved with prefix:", file_name_base, "\n")
+```
+
+```{r}
+
+#top 50 genes by variance 
+
+# Load necessary libraries
+library(SingleCellExperiment)
+library(slingshot)
+library(dplyr)
+
+# Function to get top variable genes for a specific trajectory
+get_top_variable_genes <- function(sce, trajectory, n = 50) {
+  pseudotime <- slingPseudotime(sce)[,trajectory]
+  expr_data <- assay(sce, "logcounts")
+  
+  # Remove NA pseudotime values
+  valid_cells <- !is.na(pseudotime)
+  pseudotime <- pseudotime[valid_cells]
+  expr_data <- expr_data[, valid_cells]
+  
+  # Order cells by pseudotime
+  ordered_indices <- order(pseudotime)
+  expr_data <- expr_data[, ordered_indices]
+  
+  # Calculate variance along pseudotime
+  gene_var <- apply(expr_data, 1, var)
+  
+  # Get top variable genes
+  top_genes <- names(sort(gene_var, decreasing = TRUE)[1:n])
+  
+  # Create a data frame with gene names and variances
+  result <- data.frame(
+    gene = top_genes,
+    variance = gene_var[top_genes],
+    trajectory = trajectory
+  )
+  
+  return(result)
+}
+
+# Main script
+# Assuming D0.D4.sce is your SingleCellExperiment object with Slingshot results
+
+# Get number of trajectories
+n_trajectories <- ncol(slingPseudotime(D0.D4.sce))
+
+# List to store results for each trajectory
+all_results <- list()
+
+# Get top variable genes for each trajectory
+for (i in 1:n_trajectories) {
+  all_results[[i]] <- get_top_variable_genes(D0.D4.sce, trajectory = i, n = 50)
+  cat("Processed trajectory", i, "\n")
+}
+
+# Combine results from all trajectories
+all_top_genes <- do.call(rbind, all_results)
+
+# Write results to CSV
+write.csv(all_top_genes, "top_50_variable_genes_per_trajectory.csv", row.names = FALSE)
+
+cat("\nTop 50 variable genes for each trajectory have been saved to 'top_50_variable_genes_per_trajectory.csv'\n")
+```
+
+```{r}
+#Code to run FitGam which will take a long time, but only using top 6000 genes in the dataset 
+
+# Function to check and install packages
+check_and_install <- function(package_name, bioc = FALSE) {
+  if (!requireNamespace(package_name, quietly = TRUE)) {
+    if (bioc) {
+      if (!requireNamespace("BiocManager", quietly = TRUE))
+        install.packages("BiocManager")
+      BiocManager::install(package_name)
+    } else {
+      install.packages(package_name)
+    }
+  }
+  library(package_name, character.only = TRUE)
+}
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("tradeSeq")
+
+library(tradeSeq)
+
+# Check and install required packages
+check_and_install("SingleCellExperiment", bioc = TRUE)
+check_and_install("slingshot", bioc = TRUE)
+check_and_install("tradeSeq", bioc = TRUE)
+check_and_install("scran", bioc = TRUE)
+check_and_install("dplyr", bioc = FALSE)
+
+# Make sure tradeSeq is loaded
+library(tradeSeq)
+
+cat("Testing for dynamic expression...\n")
+test_time <- system.time({
+  # Try testDynamic first
+  tryCatch({
+    dynResults <- tradeSeq::testDynamic(sce)
+  }, error = function(e) {
+    # If testDynamic fails, use associationTest
+    message("testDynamic failed, using associationTest instead")
+    dynResults <<- tradeSeq::associationTest(sce)
+  })
+})
+cat(sprintf("Time taken to test for dynamic expression: %.2f seconds\n\n", test_time["elapsed"]))
+
+# Check the structure of dynResults
+str(dynResults)
+```
+
+
+```{r}
+start_time <- Sys.time()
+
+# Assuming D0.D4.sce is your SingleCellExperiment object with Slingshot results
+
+cat("Selecting top 6000 variable genes...\n")
+gene_var_time <- system.time({
+  # Calculate gene variances
+  gene_vars <- modelGeneVar(D0.D4.sce)
+  # Select top 6000 variable genes
+  top_genes <- getTopHVGs(gene_vars, n = 6000)
+  # Subset the SCE object
+  D0.D4.sce <- D0.D4.sce[top_genes,]
+})
+cat(sprintf("Time taken to select variable genes: %.2f seconds\n\n", gene_var_time["elapsed"]))
+
+cat("Fitting GAM models...\n")
+fit_time <- system.time({
+  set.seed(123)  # for reproducibility
+  sce <- fitGAM(D0.D4.sce, nknots = 6)
+})
+cat(sprintf("Time taken to fit GAM models: %.2f minutes\n\n", fit_time["elapsed"] / 60))
+
+cat("Testing for dynamic expression...\n")
+test_time <- system.time({
+  dynResults <- testDynamic(sce)
+})
+cat(sprintf("Time taken to test for dynamic expression: %.2f seconds\n\n", test_time["elapsed"]))
+
+# Function to get top genes for each lineage
+get_top_genes_per_lineage <- function(dynResults, n = 50) {
+  dynResults %>%
+    as.data.frame() %>%
+    mutate(gene = rownames(.)) %>%
+    group_by(lineage) %>%
+    top_n(n, wt = -pvalue) %>%
+    arrange(lineage, pvalue) %>%
+    ungroup()
+}
+
+cat("Selecting top 50 genes per lineage...\n")
+select_time <- system.time({
+  top_genes <- get_top_genes_per_lineage(dynResults, n = 50)
+})
+cat(sprintf("Time taken to select top genes: %.2f seconds\n\n", select_time["elapsed"]))
+
+# Write results to CSV
+write.csv(top_genes, "top_50_dynamic_genes_per_lineage_fitGAM.csv", row.names = FALSE)
+
+end_time <- Sys.time()
+total_time <- difftime(end_time, start_time, units = "mins")
+
+cat(sprintf("Total runtime: %.2f minutes\n", as.numeric(total_time)))
+cat("Top 50 dynamic genes for each lineage have been saved to 'top_50_dynamic_genes_per_lineage_fitGAM.csv'\n")
+
+# Print summary of results
+cat("\nSummary of results:\n")
+cat(sprintf("Number of lineages: %d\n", length(unique(top_genes$lineage))))
+cat(sprintf("Total number of significant genes: %d\n", nrow(dynResults)))
+cat(sprintf("Number of genes selected per lineage: %d\n", length(unique(top_genes$gene))))
+```
+
+```{r}
+library(SingleCellExperiment)
+library(tradeSeq)
+library(ggplot2)
+library(ComplexHeatmap)
+library(circlize)
+library(pheatmap)
+library(dplyr)
+library(gridExtra)
+
+# Assuming 'sce' is your SingleCellExperiment object after fitGAM
+# and 'top_genes' is your data frame of top genes
+
+# Function to create heatmap of top genes
+create_top_genes_heatmap <- function(sce, top_genes, lineage) {
+  expr_data <- assay(sce, "counts")[unique(top_genes$gene), ]
+  pseudotime <- slingPseudotime(sce, na = FALSE)[,lineage]
+  cell_order <- order(pseudotime)
+  
+  heatmap <- Heatmap(expr_data[,cell_order], 
+                     name = "Expression",
+                     cluster_rows = FALSE, 
+                     cluster_columns = FALSE,
+                     show_column_names = FALSE,
+                     column_title = paste("Pseudotime - Lineage", lineage),
+                     col = colorRamp2(c(min(expr_data), mean(expr_data), max(expr_data)), 
+                                      c("blue", "white", "red")))
+  
+  png(paste0("heatmap_top_genes_lineage_", lineage, ".png"), width = 1200, height = 800)
+  print(heatmap)
+  dev.off()
+}
+
+# Function to create gene expression curves
+create_gene_expression_curves <- function(sce, top_genes, lineage) {
+  pseudotime <- slingPseudotime(sce, na = FALSE)[,lineage]
+  top_9_genes <- top_genes$gene[1:9]
+  
+  plot_gene_curve <- function(gene) {
+    curve_data <- data.frame(
+      Pseudotime = pseudotime,
+      Expression = assay(sce, "counts")[gene, ]
+    )
+    
+    ggplot(curve_data, aes(x = Pseudotime, y = Expression)) +
+      geom_point(alpha = 0.1) +
+      geom_smooth(method = "loess") +
+      ggtitle(gene) +
+      theme_minimal()
+  }
+  
+  plots <- lapply(top_9_genes, plot_gene_curve)
+  
+  png(paste0("gene_expression_curves_lineage_", lineage, ".png"), width = 1200, height = 1200)
+  print(gridExtra::grid.arrange(grobs = plots, ncol = 3))
+  dev.off()
+}
+
+# Function to create trajectory plot with gene expression
+create_trajectory_plot <- function(sce, top_genes, lineage) {
+  umap_coords <- reducedDim(sce, "UMAP")
+  pseudotime <- slingPseudotime(sce, na = FALSE)[,lineage]
+  top_gene <- top_genes$gene[1]
+  
+  plot_data <- data.frame(
+    UMAP1 = umap_coords[,1],
+    UMAP2 = umap_coords[,2],
+    Pseudotime = pseudotime,
+    Expression = assay(sce, "counts")[top_gene, ]
+  )
+  
+  p1 <- ggplot(plot_data, aes(x = UMAP1, y = UMAP2, color = Pseudotime)) +
+    geom_point() +
+    scale_color_viridis_c() +
+    theme_minimal() +
+    ggtitle(paste("UMAP colored by Pseudotime - Lineage", lineage))
+  
+  p2 <- ggplot(plot_data, aes(x = UMAP1, y = UMAP2, color = Expression)) +
+    geom_point() +
+    scale_color_viridis_c() +
+    theme_minimal() +
+    ggtitle(paste("Expression of", top_gene, "- Lineage", lineage))
+  
+  png(paste0("trajectory_plot_lineage_", lineage, ".png"), width = 1600, height = 800)
+  print(gridExtra::grid.arrange(p1, p2, ncol = 2))
+  dev.off()
+}
+
+# Function to create clustered heatmap of gene modules
+create_gene_modules_heatmap <- function(sce, top_genes, lineage) {
+  expr_data <- assay(sce, "counts")[unique(top_genes$gene), ]
+  pseudotime <- slingPseudotime(sce, na = FALSE)[,lineage]
+  cell_order <- order(pseudotime)
+  
+  gene_clusters <- hclust(dist(expr_data))
+  cut_tree <- cutree(gene_clusters, k = 5)  # Adjust k as needed
+  ordered_genes <- names(sort(cut_tree))
+  
+  png(paste0("gene_modules_heatmap_lineage_", lineage, ".png"), width = 1200, height = 800)
+  print(pheatmap(expr_data[ordered_genes, cell_order],
+                 show_rownames = FALSE,
+                 cluster_rows = FALSE,
+                 cluster_cols = FALSE,
+                 annotation_row = data.frame(Cluster = factor(cut_tree[ordered_genes])),
+                 main = paste("Gene Modules along Pseudotime - Lineage", lineage)))
+  dev.off()
+}
+
+# Get the number of lineages
+n_lineages <- ncol(slingPseudotime(sce))
+
+# Loop through each lineage and create visualizations
+for (lineage in 1:n_lineages) {
+  cat(sprintf("Processing lineage %d...\n", lineage))
+  
+  # Get top genes for this lineage
+  lineage_top_genes <- top_genes %>% filter(lineage == !!lineage)
+  
+  create_top_genes_heatmap(sce, lineage_top_genes, lineage)
+  create_gene_expression_curves(sce, lineage_top_genes, lineage)
+  create_trajectory_plot(sce, lineage_top_genes, lineage)
+  create_gene_modules_heatmap(sce, lineage_top_genes, lineage)
+  
+  cat(sprintf("Finished processing lineage %d.\n\n", lineage))
+}
+
+cat("All visualizations have been created and saved.\n")
+```
+
+```{r}
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+#
+```
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
